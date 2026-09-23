@@ -1,6 +1,6 @@
 """Luồng xử lý một request (docs/architecture.md mục 3).
 
-    quota → cache khớp tuyệt đối → router → cache gần giống → RAG → ghép prompt
+    cache khớp tuyệt đối → router → cache gần giống → RAG → ghép prompt
     → gọi LLM (stream) → log → lưu cache → feedback
 
 `chat()` và `retry()` trả về luồng event dạng `{"event": ..., "data": {...}}`, API chuyển thành SSE:
@@ -28,7 +28,6 @@ from app.embeddings import Embedder
 from app.llm.gateway import LLMGateway
 from app.llm.types import ChatRequest, LLMError, Usage
 from app.prompt_builder import PromptBuilder, normalize_level
-from app.quota import Quota, QuotaResult
 from app.rag import NullRetriever, Retriever
 from app.router import ROUTES, IntentRouter, Route
 from app.sessions import Session, SessionStore
@@ -45,7 +44,6 @@ RECORD_TTL = 24 * 3600
 class ChatInput:
     user_id: str
     message: str
-    plan: str = "free"
     session_id: str | None = None
     level: str | None = None
 
@@ -55,7 +53,6 @@ class RequestRecord:
     """Lưu lại để xử lý feedback "chưa hài lòng" cho request này."""
 
     user_id: str
-    plan: str
     session_id: str
     question: str
     level: str | None
@@ -92,7 +89,6 @@ class ChatService:
         router: IntentRouter,
         answer_cache: AnswerCache,
         sessions: SessionStore,
-        quota: Quota,
         usage_log: UsageLog,
         store: KVStore,
         embedder: Embedder | None = None,
@@ -104,7 +100,6 @@ class ChatService:
         self.router = router
         self.answer_cache = answer_cache
         self.sessions = sessions
-        self.quota = quota
         self.usage_log = usage_log
         self.store = store
         self.embedder = embedder
@@ -112,11 +107,6 @@ class ChatService:
         # Khóa sticky routing trên OpenRouter: mọi request dùng chung phần đầu prompt nên đi cùng một
         # nhà cung cấp, cache luôn nóng.
         self.sticky_key = f"cag-{prompt.version}"
-
-    # ------------------------------------------------------------------ quota
-
-    async def consume_quota(self, user_id: str, plan: str) -> QuotaResult:
-        return await self.quota.consume(user_id, plan)
 
     # ------------------------------------------------------------------ chat
 
@@ -128,7 +118,6 @@ class ChatService:
         row = RequestLog(
             request_id=request_id,
             user_hash=hash_user(inp.user_id),
-            plan=inp.plan,
             knowledge_version=self.prompt.version,
         )
 
@@ -164,7 +153,7 @@ class ChatService:
             await self.usage_log.write(row)
             return
 
-        tier = self._allowed_tier(route.tier, inp.plan)
+        tier = route.tier
         cacheable = self._cacheable(route, is_first)
         embedding = await emb_task if emb_task else None
 
@@ -202,11 +191,9 @@ class ChatService:
         return record
 
     async def retry(self, request_id: str, user_id: str) -> AsyncIterator[Event]:
-        """Hỏi lại bằng tầng `large` sau khi user bấm "chưa hài lòng". Không tính vào quota."""
+        """Hỏi lại bằng tầng `large` sau khi user bấm "chưa hài lòng"."""
         record = await self._get_record(request_id, user_id)
-        if not self.quota.limits(record.plan).allow_large:
-            raise ServiceError("plan_forbidden", "Gói hiện tại không dùng được model lớn", 403)
-        # Hỏi lại không tính quota, nên mỗi request chỉ được hỏi lại một lần và không hỏi lại bản hỏi lại.
+        # Mỗi request chỉ được hỏi lại một lần, và không hỏi lại bản hỏi lại.
         if record.is_retry or await self.store.incr(f"retried:{request_id}", ttl=RECORD_TTL) > 1:
             raise ServiceError("already_retried", "Câu trả lời này đã được hỏi lại rồi", 409)
         started = time.monotonic()
@@ -220,18 +207,17 @@ class ChatService:
             history, idx = [], None
             user_turn = self.prompt.compose_user_turn(record.question, level=record.level, intent=record.intent)
         row = RequestLog(
-            request_id=new_id, user_hash=hash_user(user_id), kind="retry", plan=record.plan,
+            request_id=new_id, user_hash=hash_user(user_id), kind="retry",
             session_id=session.id, knowledge_version=self.prompt.version, intent=record.intent,
             route_reason="feedback_retry",
         )
         route = Route("large", record.cacheable, "feedback_retry", intent=record.intent)
-        inp = ChatInput(user_id=user_id, message=record.question, plan=record.plan, session_id=session.id,
-                        level=record.level)
+        inp = ChatInput(user_id=user_id, message=record.question, session_id=session.id, level=record.level)
         async for ev in self._generate(
             request_id=new_id, inp=inp, session=session, question=record.question, level=record.level,
             route=route, tier="large", cacheable=record.cacheable, embedding=None, history=history,
             user_turn=user_turn, turn_index=idx, row=row, started=started, replace_turn=idx is not None,
-            refund_on_error=False, is_retry=True,
+            is_retry=True,
         ):
             yield ev
 
@@ -241,7 +227,7 @@ class ChatService:
         self, *, request_id: str, inp: ChatInput, session: Session, question: str, level: str | None,
         route: Route, tier: str, cacheable: bool, embedding: np.ndarray | None,
         history: list[dict[str, str]], user_turn: str, turn_index: int | None, row: RequestLog,
-        started: float, replace_turn: bool = False, refund_on_error: bool = True, is_retry: bool = False,
+        started: float, replace_turn: bool = False, is_retry: bool = False,
     ) -> AsyncIterator[Event]:
         row.tier = tier
         reasoning = tier == "large" and route.intent in self.settings.reasoning_intents
@@ -290,8 +276,6 @@ class ChatService:
         except LLMError as e:
             log.error("Request %s lỗi: %s", request_id, e)
             row.status, row.error, row.latency_ms = "error", str(e)[:500], _ms(started)
-            if refund_on_error:
-                await self.quota.refund(inp.user_id)
             yield _event("error", request_id=request_id, code="llm_unavailable",
                          message="Hệ thống đang bận, bạn thử lại sau ít phút nhé.")
         except (asyncio.CancelledError, GeneratorExit):
@@ -329,12 +313,6 @@ class ChatService:
         if not (self.settings.semantic_cache_enabled or self.router.uses_embeddings):
             return None
         return asyncio.create_task(self.embedder.embed(question))
-
-    def _allowed_tier(self, tier: str, plan: str) -> str:
-        # Quyền dùng model đắt kiểm tra bằng code, không để router quyết định.
-        if tier == "large" and not self.quota.limits(plan).allow_large:
-            return "small"
-        return tier
 
     def _cacheable(self, route: Route, is_first: bool) -> bool:
         intent_ok = route.reason == route.intent and route.intent in ROUTES and ROUTES[route.intent][1]
@@ -379,7 +357,7 @@ class ChatService:
                            level: str | None, route: Route, tier: str, cacheable: bool,
                            turn_index: int | None, *, is_retry: bool = False) -> None:
         record = RequestRecord(
-            user_id=inp.user_id, plan=inp.plan, session_id=session.id, question=question, level=level,
+            user_id=inp.user_id, session_id=session.id, question=question, level=level,
             intent=route.intent, tier=tier, cacheable=cacheable, turn_index=turn_index, is_retry=is_retry,
         )
         await self.store.set(f"req:{request_id}", json.dumps(asdict(record), ensure_ascii=False), RECORD_TTL)

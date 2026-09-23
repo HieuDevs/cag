@@ -59,7 +59,7 @@ Dòng cuối cho thấy caching (CAG) giúp giảm khoảng 3 lần chi phí. Nh
 
 ## 5. Router (Jev)
 
-~400 token mỗi request × $0.042/1M token → **~$5/tháng (300k) đến ~$17/tháng (1M)**. Không đáng kể.
+~400 token mỗi request × $0.042/1M token → **~$5/tháng (300k) đến ~$17/tháng (1M)**. Không đáng kể. Jev gọi qua OpenRouter nên tính chung vào hóa đơn OpenRouter, không cần tài khoản TypeSafe riêng.
 
 ## 6. Các cách tối ưu
 

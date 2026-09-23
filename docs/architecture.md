@@ -24,7 +24,7 @@ Giới hạn của CAG là kiến thức phải vừa context và càng dài cà
 
 ## 3. Luồng xử lý một request
 
-1. **Quota:** kiểm tra số lượt còn lại theo gói (Redis). Hết lượt thì trả thông báo nâng cấp.
+1. **Quota:** kiểm tra số lượt còn lại theo gói (Redis). Hết lượt thì trả thông báo nâng cấp. *(Chưa làm ở bản test.)*
 2. **Cache câu trả lời, khớp tuyệt đối:** hash câu hỏi đã chuẩn hóa. Chỉ áp dụng cho câu hỏi đầu phiên.
 3. **Router (Jev):** phân loại intent và kiểm tra câu hỏi có phụ thuộc ngữ cảnh không. Xem [routing.md](routing.md).
 4. **Cache câu trả lời, gần giống:** chỉ chạy khi router đánh dấu `cacheable`.
@@ -40,8 +40,8 @@ Giới hạn của CAG là kiến thức phải vừa context và càng dài cà
 | Thành phần | Nhiệm vụ | Hiện tại (MVP) | Dự kiến khi mở rộng |
 |---|---|---|---|
 | API | `/chat` (stream), `/feedback` | FastAPI | |
-| Quota | Giới hạn lượt hỏi theo gói | Redis | |
-| Router | Phân loại intent, kiểm tra phụ thuộc ngữ cảnh, lọc câu ngoài phạm vi | Jev; dự phòng `bge-m3` + so khớp câu mẫu có nhãn | Logistic regression trên dữ liệu thật |
+| Quota | Giới hạn lượt hỏi theo gói | Chưa làm (bản test) | Redis |
+| Router | Phân loại intent, kiểm tra phụ thuộc ngữ cảnh, lọc câu ngoài phạm vi | Jev qua OpenRouter; dự phòng `bge-m3` + so khớp câu mẫu có nhãn | Logistic regression trên dữ liệu thật |
 | Prompt builder | Giữ phần đầu prompt cố định từng byte, quản lý `KNOWLEDGE_VERSION` | Module nội bộ | |
 | LLM gateway | Gọi model theo tầng, dự phòng, chuẩn hóa `usage` | OpenRouter | vLLM tự host (cùng API) |
 | Cache câu trả lời | Khớp tuyệt đối và gần giống | Redis + chỉ mục embedding trong bộ nhớ | Redis + pgvector (khi chạy nhiều worker) |
@@ -66,7 +66,7 @@ Giới hạn của CAG là kiến thức phải vừa context và càng dài cà
 
 ## 6. LLM gateway (OpenRouter)
 
-Mọi model đều gọi qua **OpenRouter** (API tương thích OpenAI), nên chỉ cần một API key và một client. Mỗi tầng có một danh sách model theo thứ tự ưu tiên, model đứng sau là dự phòng (`app/config.py`, đổi được bằng biến môi trường `TIER_SMALL`, `TIER_LARGE`).
+Mọi model đều gọi qua **OpenRouter** (API tương thích OpenAI), gồm cả model trả lời, router Jev và embedding, nên chỉ cần một API key và một client. Mỗi tầng có một danh sách model theo thứ tự ưu tiên, model đứng sau là dự phòng (`app/config.py`, đổi được bằng biến môi trường `TIER_SMALL`, `TIER_LARGE`).
 
 | Tầng | Model chính | Dự phòng |
 |---|---|---|
@@ -79,7 +79,9 @@ Mọi model đều gọi qua **OpenRouter** (API tương thích OpenAI), nên ch
 - **Thinking:** tầng `small` gửi `reasoning: {enabled: false}`. Tầng `large` chỉ bật với intent trong `REASONING_INTENTS` (mặc định `grammar`), với `reasoning: {max_tokens: 1024, exclude: true}`. `max_tokens` được cộng thêm phần thinking để câu trả lời không bị cắt.
 - **Dữ liệu:** không gửi thông tin định danh user vào prompt. OpenRouter có `provider.data_collection = "deny"` (biến `OPENROUTER_DATA_COLLECTION`) để chỉ dùng nhà cung cấp không lưu dữ liệu để train. Kiểm tra lại danh sách nhà cung cấp còn lại sau khi bật. Xem mục tuân thủ trong [roadmap.md](roadmap.md).
 - **Tự host về sau:** vLLM có API tương thích OpenAI. Chỉ cần đổi `OPENROUTER_BASE_URL` sang vLLM (chạy với `--enable-prefix-caching`), code không đổi.
+- **Jev** (`typesafe/jev-1.13`) cũng gọi qua OpenRouter, ở System One API `POST /api/v1/systemone`, cùng API key. Xem [routing.md](routing.md).
 - **Embedding** (`baai/bge-m3`, $0.01/1M token) cũng gọi qua OpenRouter, dùng cho router dự phòng và cache câu trả lời gần giống.
+- Khi trỏ `OPENROUTER_BASE_URL` sang vLLM tự host, Jev vẫn gọi OpenRouter qua `JEV_URL` riêng.
 
 ## 7. Cấu trúc thư mục
 
@@ -95,7 +97,6 @@ cag/
 │   ├── llm/               # openrouter.py (client), gateway.py (tầng + dự phòng), types.py (usage)
 │   ├── answer_cache.py    # khớp tuyệt đối + gần giống
 │   ├── sessions.py        # lịch sử hội thoại, chỉ nối thêm, tóm tắt khi quá 10 lượt
-│   ├── quota.py           # giới hạn lượt hỏi theo gói
 │   ├── usage_log.py       # log mỗi request (SQLite, chuyển Postgres sau)
 │   ├── store.py           # Redis / bộ nhớ trong tiến trình
 │   ├── rag.py             # interface cho giai đoạn 6

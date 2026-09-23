@@ -33,7 +33,7 @@ def test_build_body_small_tier_disables_reasoning(settings):
     body = c.build_body(ModelTarget(model="qwen/x", providers=["alibaba"]), REQ, sticky_key="cag-v1")
     assert body["reasoning"] == {"enabled": False}
     assert body["max_tokens"] == 300
-    assert body["provider"] == {"order": ["alibaba"], "allow_fallbacks": True}
+    assert body["provider"] == {"order": ["alibaba"], "allow_fallbacks": True, "data_collection": "allow"}
     assert body["session_id"] == "cag-v1"
     assert body["stream"] is True
 

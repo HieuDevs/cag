@@ -7,11 +7,6 @@ OFF_TOPIC_ANSWER = (
     "\"Dịch giúp mình câu: Cuối tuần này bạn có rảnh không?\" nhé!"
 )
 
-QUOTA_EXCEEDED = (
-    "Bạn đã dùng hết lượt hỏi hôm nay. Lượt hỏi sẽ được làm mới lúc 0h (giờ Việt Nam), "
-    "hoặc bạn có thể nâng cấp gói để hỏi thêm."
-)
-
 # Gửi ở cuối lịch sử để dùng lại cache phần đầu prompt và cache lịch sử.
 SUMMARY_INSTRUCTION = (
     "<yeu_cau_he_thong>\n"

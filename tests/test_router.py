@@ -1,11 +1,12 @@
 import asyncio
-from types import SimpleNamespace
 
+import httpx
 import numpy as np
 import pytest
 
 from app.embeddings import Embedder
 from app.llm.openrouter import OpenRouterClient
+from app.llm.types import LLMError
 from app.router import (
     JEV_QUESTIONS,
     Classification,
@@ -15,6 +16,7 @@ from app.router import (
     build_router,
     needs_context_heuristic,
 )
+from tests.conftest import FakeOpenRouter
 
 
 class StubClassifier:
@@ -71,32 +73,45 @@ async def test_all_classifiers_fail_goes_large():
     assert r.tier == "large"
 
 
-async def test_jev_classifier_parses_sdk_response(settings):
-    class FakeJev:
-        def __init__(self):
-            self.kwargs = None
+def openrouter_client(settings, handler) -> OpenRouterClient:
+    http = httpx.AsyncClient(base_url=settings.openrouter_base_url, transport=httpx.MockTransport(handler))
+    return OpenRouterClient(settings, http_client=http)
 
-        async def system_one(self, **kwargs):
-            self.kwargs = kwargs
-            return SimpleNamespace(
-                choices={"intent": SimpleNamespace(choice="grammar", confidence=0.82)},
-                nouls={"needs_context": SimpleNamespace(noul=0.12)},
-            )
 
-    fake = FakeJev()
-    c = await JevClassifier(settings, client=fake).classify("了 dùng khi nào", None)
+async def test_jev_goes_through_openrouter_system_one(settings):
+    fake = FakeOpenRouter()
+    c = await JevClassifier(settings, openrouter_client(settings, fake)).classify("了 dùng khi nào", None)
     assert c == Classification("grammar", 0.82, 0.12, "jev")
-    assert fake.kwargs == {"state": {"question": "了 dùng khi nào"}, "questions": JEV_QUESTIONS}
+    [req] = fake.jev_requests
+    assert req["url"] == "https://openrouter.ai/api/v1/systemone"
+    assert req["auth"] == "Bearer test-key", "Dùng OPENROUTER_API_KEY, không cần key TypeSafe"
+    assert req["model"] == "typesafe/jev-1.13"
+    assert req["state"] == {"question": "了 dùng khi nào"} and req["questions"] == JEV_QUESTIONS
+
+
+@pytest.mark.parametrize("status,retryable", [(429, True), (503, True), (402, False)])
+async def test_jev_http_error(settings, status, retryable):
+    fake = FakeOpenRouter(jev=(status, "boom"))
+    with pytest.raises(LLMError) as ei:
+        await JevClassifier(settings, openrouter_client(settings, fake)).classify("q", None)
+    assert ei.value.status == status and ei.value.retryable is retryable
+
+
+async def test_jev_error_falls_back_to_embedding(settings):
+    fake = FakeOpenRouter(jev=(503, "down"))
+    emb = StubClassifier("embedding", cls("lookup", backend="embedding"), threshold=0.5)
+    router = IntentRouter([JevClassifier(settings, openrouter_client(settings, fake)), emb])
+    r = await router.route("你好 là gì")
+    assert r.backend == "embedding" and r.tier == "small"
 
 
 async def test_jev_timeout(settings):
-    class SlowJev:
-        async def system_one(self, **kwargs):
-            await asyncio.sleep(5)
+    async def slow(request):
+        await asyncio.sleep(5)
 
     settings.jev_timeout_seconds = 0.01
     with pytest.raises(asyncio.TimeoutError):
-        await JevClassifier(settings, client=SlowJev()).classify("q", None)
+        await JevClassifier(settings, openrouter_client(settings, slow)).classify("q", None)
 
 
 class KeywordEmbedder(Embedder):
@@ -140,13 +155,12 @@ def test_needs_context_heuristic():
     assert needs_context_heuristic("你好 nghĩa là gì") < 0.5
 
 
-def test_build_router_without_jev_key(settings):
+def test_build_router(settings):
+    client = OpenRouterClient(settings)
+    embedder = Embedder(client, "baai/bge-m3", timeout=1)
     settings.router_backend, settings.router_fallback = "jev", "embedding"
-    embedder = Embedder(OpenRouterClient(settings), "baai/bge-m3", timeout=1)
-    r = build_router(settings, embedder)
-    assert [c.name for c in r.classifiers] == ["embedding"]
-    settings.typesafe_api_key = "ts-key"
-    r = build_router(settings, embedder)
-    assert [c.name for c in r.classifiers] == ["jev", "embedding"]
+    assert [c.name for c in build_router(settings, client, embedder).classifiers] == ["jev", "embedding"]
+    settings.router_backend, settings.router_fallback = "embedding", "none"
+    assert [c.name for c in build_router(settings, client, embedder).classifiers] == ["embedding"]
     settings.router_backend, settings.router_fallback = "none", "none"
-    assert build_router(settings, embedder).classifiers == []
+    assert build_router(settings, client, embedder).classifiers == []

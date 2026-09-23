@@ -4,6 +4,7 @@ Tài liệu liên quan:
 - Usage luôn có trong chunk cuối của stream, gồm `prompt_tokens_details.cached_tokens` và `cost`.
 - `provider.order` ghim nhà cung cấp, `session_id` làm khóa sticky routing để cache luôn nóng.
 - `reasoning.enabled=false` tắt thinking; `reasoning.max_tokens` giới hạn phần suy nghĩ.
+- Jev (TypeSafe) gọi qua System One API `POST /api/v1/systemone`, cùng API key.
 """
 
 import json
@@ -25,11 +26,11 @@ NON_RETRYABLE_STATUS = {401, 402, 403}
 class OpenRouterClient:
     def __init__(self, settings: Settings, http_client: httpx.AsyncClient | None = None):
         self.settings = settings
-        headers = {"Authorization": f"Bearer {settings.openrouter_api_key}"}
-        if settings.openrouter_app_url:
-            headers["HTTP-Referer"] = settings.openrouter_app_url
-        if settings.openrouter_app_name:
-            headers["X-Title"] = settings.openrouter_app_name
+        headers = {
+            "Authorization": f"Bearer {settings.openrouter_api_key}",
+            "HTTP-Referer": settings.openrouter_app_url,
+            "X-Title": settings.openrouter_app_name,
+        }
         self._http = http_client or httpx.AsyncClient(
             base_url=settings.openrouter_base_url,
             timeout=httpx.Timeout(settings.llm_timeout_seconds, connect=settings.llm_connect_timeout_seconds),
@@ -56,10 +57,8 @@ class OpenRouterClient:
         if target.providers:
             provider["order"] = target.providers
             provider["allow_fallbacks"] = True
-        if self.settings.openrouter_data_collection:
-            provider["data_collection"] = self.settings.openrouter_data_collection
-        if provider:
-            body["provider"] = provider
+        provider["data_collection"] = self.settings.openrouter_data_collection
+        body["provider"] = provider
         if sticky_key:
             body["session_id"] = sticky_key[:256]
         return body
@@ -114,6 +113,22 @@ class OpenRouterClient:
             raise LLMError(f"OpenRouter timeout: {e!r}", retryable=True) from e
         except httpx.TransportError as e:
             raise LLMError(f"OpenRouter connection error: {e!r}", retryable=True) from e
+
+    async def system_one(self, model: str, state: Any, questions: dict[str, Any], *, timeout: float) -> dict[str, Any]:
+        """Gọi Jev. Trả về body JSON: `{"model", "usage", "answers": {tên câu hỏi: câu trả lời}}`."""
+        try:
+            resp = await self._http.post(
+                self.settings.jev_url,
+                json={"model": model, "state": state, "questions": questions},
+                headers=self._headers,
+                timeout=timeout,
+            )
+        except httpx.HTTPError as e:
+            raise LLMError(f"OpenRouter systemone error: {e!r}") from e
+        if resp.status_code >= 400:
+            raise LLMError(f"OpenRouter systemone {resp.status_code}: {_error_message(resp.text)}",
+                           status=resp.status_code, retryable=resp.status_code not in NON_RETRYABLE_STATUS)
+        return resp.json()
 
     async def embed(self, model: str, inputs: list[str], *, timeout: float) -> list[list[float]]:
         try:

@@ -18,7 +18,6 @@ CREATE TABLE IF NOT EXISTS requests (
     request_id TEXT PRIMARY KEY,
     ts REAL NOT NULL,
     user_hash TEXT NOT NULL,
-    plan TEXT,
     session_id TEXT,
     kind TEXT NOT NULL,              -- chat | retry
     knowledge_version TEXT,
@@ -58,7 +57,6 @@ class RequestLog:
     user_hash: str
     kind: str = "chat"
     ts: float = field(default_factory=time.time)
-    plan: str | None = None
     session_id: str | None = None
     knowledge_version: str | None = None
     intent: str | None = None

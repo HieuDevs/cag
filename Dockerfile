@@ -6,7 +6,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
 
 COPY pyproject.toml README.md ./
 COPY app ./app
-RUN pip install --no-cache-dir -e '.[jev]'
+RUN pip install --no-cache-dir -e .
 
 COPY knowledge ./knowledge
 

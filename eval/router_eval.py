@@ -119,13 +119,15 @@ async def main() -> None:
     examples = [Example(**json.loads(line)) for line in args.data.read_text("utf-8").splitlines() if line.strip()]
     openrouter = OpenRouterClient(settings)
     classifiers = []
-    if args.backend in ("jev", "all") and settings.typesafe_api_key:
-        classifiers.append((JevClassifier(settings), settings.jev_confidence_threshold))
-    if args.backend in ("embedding", "all") and settings.openrouter_api_key:
+    if not settings.openrouter_api_key:
+        raise SystemExit("Cần OPENROUTER_API_KEY (dùng cho cả Jev và embedding)")
+    if args.backend in ("jev", "all"):
+        # Eval không cần nhanh: nới timeout để đo chất lượng, không đo độ trễ.
+        settings.jev_timeout_seconds = 10
+        classifiers.append((JevClassifier(settings, openrouter), settings.jev_confidence_threshold))
+    if args.backend in ("embedding", "all"):
         embedder = Embedder(openrouter, settings.embedding_model, timeout=10)
         classifiers.append((EmbeddingClassifier(settings, embedder), settings.embedding_confidence_threshold))
-    if not classifiers:
-        raise SystemExit("Cần TYPESAFE_API_KEY (Jev) hoặc OPENROUTER_API_KEY (embedding)")
 
     reports = []
     for clf, threshold in classifiers:

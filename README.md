@@ -4,7 +4,7 @@ Trợ lý AI trả lời câu hỏi học thuật tiếng Trung cho người Vi�
 
 Hệ thống kết hợp **Cache-Augmented Generation (CAG)** cho phần kiến thức cốt lõi với **định tuyến theo intent** để giữ chi phí thấp ở quy mô khoảng 10.000 user.
 
-Mọi model (Qwen, DeepSeek, embedding) đều gọi qua **OpenRouter**, nên chỉ cần một API key.
+Mọi model (Qwen, DeepSeek, router Jev, embedding) đều gọi qua **OpenRouter**, nên chỉ cần một API key.
 
 > **Trạng thái:** đã có MVP chạy được (giai đoạn 1–5 trong [roadmap](docs/roadmap.md#tiến-độ-2026-09-23)). Chưa chạy với traffic thật, nên các con số chi phí vẫn là ước lượng.
 
@@ -14,7 +14,7 @@ Mọi model (Qwen, DeepSeek, embedding) đều gọi qua **OpenRouter**, nên ch
 Câu hỏi
   │
   ▼
-Quota ──► Cache câu trả lời (khớp tuyệt đối) ──► Router: Jev (~200ms, ~$0)
+Cache câu trả lời (khớp tuyệt đối) ──► Router: Jev (~200ms, ~$0)
                                                  │
         ┌───────────┬──────────────┬─────────────┼───────────────────┐
     off_topic     small          large       confidence thấp      Jev lỗi
@@ -32,7 +32,7 @@ Quota ──► Cache câu trả lời (khớp tuyệt đối) ──► Router:
 | Hạng mục | Lựa chọn | Lý do |
 |---|---|---|
 | Model trả lời | **Qwen** (chính), **DeepSeek** (dự phòng / A/B), gọi qua **OpenRouter** | Mạnh tiếng Trung, giá rẻ, tự cache phần đầu prompt. Một API key cho mọi model. Qwen có đường chuyển sang tự host |
-| Router | **Jev** (TypeSafe), dự phòng bằng bộ phân loại embedding | Rẻ (~$17/tháng cho 1M request), nhanh, trả về confidence để quyết định có chuyển câu hỏi lên model mạnh hơn không |
+| Router | **Jev** (TypeSafe, gọi qua OpenRouter), dự phòng bằng bộ phân loại embedding | Rẻ (~$17/tháng cho 1M request), nhanh, trả về confidence để quyết định có chuyển câu hỏi lên model mạnh hơn không |
 | Kiến thức | CAG cho phần lõi (~20K token) + RAG cho phần tra cứu lớn | Tài liệu lớn như từ vựng HSK hay từ điển không vừa context |
 | Hạ tầng | Dùng API trước, tự host sau khi traffic ổn định | Ra sản phẩm nhanh, chi phí tỉ lệ theo lượng dùng |
 
@@ -42,18 +42,22 @@ Cần Python 3.11+ và một [OpenRouter API key](https://openrouter.ai/keys).
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
-pip install -e '.[dev,jev]'
-cp .env.example .env            # điền OPENROUTER_API_KEY (và TYPESAFE_API_KEY nếu dùng Jev)
+pip install -e '.[dev]'
+cp .env.example .env            # thay CHANGE_ME bằng OPENROUTER_API_KEY
 uvicorn app.main:app --reload
 ```
 
-Không có Redis thì để trống `REDIS_URL`: dữ liệu nằm trong bộ nhớ tiến trình, chỉ hợp cho dev. Chạy đủ bộ với Redis:
+**Cấu hình:** `.env.example` liệt kê mọi biến, biến nào cũng có giá trị. Chỉ `OPENROUTER_API_KEY` là bắt buộc (dùng cho model trả lời, Jev và embedding); trống hoặc còn `CHANGE_ME` thì server dừng khi khởi động.
+
+> **Bản test:** chưa có xác thực request và quota theo gói. Sẽ thêm sau.
+
+Không có Redis thì đặt `REDIS_URL=memory://`: dữ liệu nằm trong bộ nhớ tiến trình, chỉ hợp cho dev. Chạy đủ bộ với Redis:
 
 ```bash
 docker compose up --build
 ```
 
-Không có `TYPESAFE_API_KEY` thì router tự dùng bộ phân loại embedding (`baai/bge-m3` qua OpenRouter).
+Router Jev (`typesafe/jev-1.13`) gọi qua OpenRouter bằng cùng key, không cần key TypeSafe riêng. Jev lỗi hoặc timeout thì router tự chuyển sang bộ phân loại embedding (`baai/bge-m3`, cũng qua OpenRouter).
 
 ### Gọi API
 
@@ -72,13 +76,11 @@ event: done   data: {"model": "qwen/qwen3.7-plus", "usage": {"cached_input_token
 
 | Endpoint | Mô tả |
 |---|---|
-| `POST /chat` | `user_id`, `message`, `plan` (`free`/`pro`), `session_id` (lấy từ event `meta` để hỏi tiếp), `level` (`HSK1`…`HSK6`, `HSK7-9`), `stream` (mặc định `true`, `false` thì trả JSON). Hết lượt thì trả 429 |
+| `POST /chat` | `user_id`, `message`, `session_id` (lấy từ event `meta` để hỏi tiếp), `level` (`HSK1`…`HSK6`, `HSK7-9`), `stream` (mặc định `true`, `false` thì trả JSON) |
 | `POST /feedback` | `request_id`, `user_id`, `rating` (`satisfied`/`unsatisfied`). Thêm `retry: true` để hỏi lại bằng tầng `large` |
 | `GET /health` | Version kiến thức, router đang dùng, model của từng tầng |
 | `GET /stats?hours=24` | Chi phí, tỉ lệ đọc cache, tỉ lệ hit cache câu trả lời, TTFT p95, phân bố intent/tầng |
 | `POST /admin/warmup` | Làm nóng cache phần đầu prompt cho model chính của mỗi tầng |
-
-Service chạy sau backend chính: backend chính xác thực user rồi gửi `user_id` và `plan` sang. Đặt `API_KEY` để bắt buộc header `Authorization: Bearer <API_KEY>`.
 
 ### Lệnh quản trị
 
@@ -98,6 +100,7 @@ Cấu hình đầy đủ ở [app/config.py](app/config.py) và [.env.example](.
 
 | File | Nội dung |
 |---|---|
+| [docs/how-it-works.md](docs/how-it-works.md) | Hệ thống chạy như thế nào: khởi động, từng bước của một request, prompt, OpenRouter, dữ liệu lưu ở đâu, xử lý lỗi |
 | [docs/architecture.md](docs/architecture.md) | Luồng xử lý, các thành phần, gateway OpenRouter, cấu trúc thư mục |
 | [docs/routing.md](docs/routing.md) | Định tuyến bằng Jev: câu hỏi, bảng định tuyến, dự phòng, rủi ro |
 | [docs/caching.md](docs/caching.md) | 3 tầng cache, CAG khi gọi qua API (KV cache ở nhà cung cấp), các lỗi hay gặp |

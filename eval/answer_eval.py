@@ -80,7 +80,7 @@ async def main() -> None:
         for n, item in enumerate(items):
             out = {"text": "", "meta": {}, "done": {}, "error": None}
             async for ev in container.service.chat(ChatInput(user_id=f"eval-{n}", message=item["question"],
-                                                             plan="pro", level=item.get("level"))):
+                                                             level=item.get("level"))):
                 if ev["event"] == "delta":
                     out["text"] += ev["data"]["text"]
                 else:

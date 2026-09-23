@@ -15,7 +15,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-jev = ["typesafe-sdk>=0.7"]
 dev = ["pytest>=8", "pytest-asyncio>=0.23", "ruff>=0.5"]
 
 [project.scripts]

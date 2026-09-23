@@ -8,7 +8,7 @@ import httpx
 import numpy as np
 import pytest
 
-from app.config import ModelTarget, PlanLimits, Settings
+from app.config import ModelTarget, Settings
 from app.container import build_container
 from app.llm.types import ChatRequest, LLMError, StreamEvent, Usage
 from app.router import IntentRouter, Route
@@ -50,9 +50,25 @@ class FakeOpenRouter:
     })
     requests: list[dict[str, Any]] = field(default_factory=list)
     embedding_calls: int = 0
+    # Câu trả lời của Jev (System One API): (intent, confidence, needs_context), hoặc (status, message) để giả lập lỗi.
+    jev: tuple = ("grammar", 0.82, 0.12)
+    jev_requests: list[dict[str, Any]] = field(default_factory=list)
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
+        if request.url.path.endswith("/systemone"):
+            self.jev_requests.append({"url": str(request.url), "auth": request.headers.get("authorization"), **body})
+            if isinstance(self.jev[0], int):
+                return httpx.Response(self.jev[0], json={"error": {"message": self.jev[1]}})
+            intent, conf, ctx = self.jev
+            return httpx.Response(200, json={
+                "model": body["model"], "usage": {"input_tokens": 120, "output_tokens": 3},
+                "answers": {
+                    "intent": {"type": "choice", "choice": intent, "confidence": conf,
+                               "probabilities": {intent: conf}},
+                    "needs_context": {"type": "noul", "noul": ctx},
+                },
+            })
         if request.url.path.endswith("/embeddings"):
             self.embedding_calls += 1
             data = [{"index": i, "embedding": fake_embedding(t)} for i, t in enumerate(body["input"])]
@@ -109,12 +125,9 @@ def settings(tmp_path) -> Settings:
         tier_large=[ModelTarget(model="qwen/large", providers=["alibaba"]), ModelTarget(model="deepseek/large")],
         router_backend="none",
         router_fallback="none",
-        redis_url="",
+        redis_url="memory://",
         usage_db_path=tmp_path / "usage.sqlite3",
-        plans={"free": PlanLimits(daily_requests=5, allow_large=True),
-               "basic": PlanLimits(daily_requests=5, allow_large=False)},
         max_turns_per_session=3,
-        api_key="",
     )
 
 

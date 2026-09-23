@@ -102,12 +102,6 @@ async def test_grammar_on_large_enables_reasoning(service, backend, router):
     assert backend.calls[0][1].reasoning is True
 
 
-async def test_plan_without_large_is_downgraded(service, backend, router):
-    router.next = Route("large", True, "grammar", intent="grammar", confidence=0.9)
-    out = await collect(service.chat(ChatInput(user_id="u1", message="了 và 过", plan="basic")))
-    assert out["meta"]["tier"] == "small" and backend.calls[0][0].model == "qwen/small"
-
-
 async def test_truncated_answer_is_not_cached(service, backend):
     backend.finish_reason = "length"
     await collect(service.chat(ChatInput(user_id="u1", message="你好 là gì")))
@@ -122,12 +116,10 @@ async def test_fallback_model_is_logged(service, backend, container):
     assert rows(container)[-1]["failed_models"] == "qwen/small"
 
 
-async def test_llm_failure_refunds_quota(service, backend, container):
+async def test_llm_failure_returns_error_event(service, backend, container):
     backend.fail_models = {"qwen/small", "deepseek/small"}
-    assert (await service.consume_quota("u1", "free")).used == 1
     out = await collect(service.chat(ChatInput(user_id="u1", message="你好")))
-    assert out["error"]["code"] == "llm_unavailable"
-    assert (await service.consume_quota("u1", "free")).used == 1, "Lượt lỗi đã được trả lại"
+    assert out["error"]["code"] == "llm_unavailable" and out["done"] is None
     assert rows(container)[-1]["status"] == "error"
 
 
@@ -169,13 +161,6 @@ async def test_feedback_for_other_user_is_rejected(service):
     assert ei.value.status == 404
 
 
-async def test_retry_forbidden_for_plan_without_large(service):
-    first = await collect(service.chat(ChatInput(user_id="u1", message="你好", plan="basic")))
-    with pytest.raises(ServiceError) as ei:
-        await collect(service.retry(first["meta"]["request_id"], "u1"))
-    assert ei.value.code == "plan_forbidden"
-
-
 async def test_warmup_hits_primary_model_of_each_tier(service, backend):
     results = await service.warmup()
     assert [r["model"] for r in results] == ["qwen/small", "qwen/large"]
@@ -190,3 +175,21 @@ async def test_retry_is_limited_to_once(service):
         with pytest.raises(ServiceError) as ei:
             await collect(service.retry(target, "u1"))
         assert ei.value.code == "already_retried"
+
+
+async def test_full_pipeline_with_jev_via_openrouter(settings, backend, fake_openrouter):
+    import httpx
+
+    from app.container import build_container
+    from app.store import MemoryStore
+
+    settings.router_backend, settings.router_fallback = "jev", "embedding"
+    fake_openrouter.jev = ("grammar", 0.9, 0.05)
+    http = httpx.AsyncClient(base_url=settings.openrouter_base_url,
+                             transport=httpx.MockTransport(fake_openrouter))
+    c = build_container(settings, http_client=http, chat_backend=backend, store=MemoryStore())
+    out = await collect(c.service.chat(ChatInput(user_id="u1", message="了 và 过 khác nhau thế nào")))
+    assert out["meta"]["tier"] == "large" and out["meta"]["intent"] == "grammar"
+    assert len(fake_openrouter.jev_requests) == 1
+    assert rows(c)[-1]["router_backend"] == "jev"
+    c.usage_log.close()

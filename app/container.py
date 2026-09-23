@@ -10,8 +10,7 @@ from app.embeddings import Embedder
 from app.llm.gateway import ChatBackend, LLMGateway
 from app.llm.openrouter import OpenRouterClient
 from app.prompt_builder import PromptBuilder, load_knowledge
-from app.quota import Quota
-from app.router import IntentRouter, JevClassifier, build_router
+from app.router import IntentRouter, build_router
 from app.service import ChatService
 from app.sessions import SessionStore
 from app.store import KVStore, make_store
@@ -28,9 +27,6 @@ class Container:
     usage_log: UsageLog
 
     async def aclose(self) -> None:
-        for clf in self.router.classifiers:
-            if isinstance(clf, JevClassifier):
-                await clf.aclose()
         await self.openrouter.aclose()
         await self.store.aclose()
         self.usage_log.close()
@@ -49,7 +45,7 @@ def build_container(
     openrouter = OpenRouterClient(settings, http_client=http_client)
     embedder = Embedder(openrouter, settings.embedding_model, timeout=settings.embedding_timeout_seconds)
     store = store or make_store(settings.redis_url)
-    router = router or build_router(settings, embedder)
+    router = router or build_router(settings, openrouter, embedder)
     usage_log = UsageLog(settings.usage_db_path)
     service = ChatService(
         settings,
@@ -64,7 +60,6 @@ def build_container(
             semantic_max_entries=settings.semantic_cache_max_entries,
         ),
         sessions=SessionStore(store, ttl=settings.session_ttl_seconds),
-        quota=Quota(store, settings.plans, timezone=settings.quota_timezone),
         usage_log=usage_log,
         store=store,
         embedder=embedder,

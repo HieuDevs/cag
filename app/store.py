@@ -1,7 +1,7 @@
-"""Kho key-value dùng chung cho quota, phiên hội thoại và cache câu trả lời.
+"""Kho key-value cho phiên hội thoại, cache câu trả lời và bản ghi request.
 
-`RedisStore` cho production. `MemoryStore` cho dev và test: dữ liệu mất khi restart và không
-chia sẻ giữa các worker.
+`RedisStore` cho production. `MemoryStore` (`REDIS_URL=memory://`) cho dev và test: dữ liệu mất khi
+restart và không chia sẻ giữa các worker.
 """
 
 import time
@@ -13,7 +13,6 @@ class KVStore(Protocol):
     async def set(self, key: str, value: str, ttl: int | None = None) -> None: ...
     async def delete(self, key: str) -> None: ...
     async def incr(self, key: str, ttl: int | None = None) -> int: ...
-    async def decr(self, key: str) -> int: ...
     async def ping(self) -> bool: ...
     async def aclose(self) -> None: ...
 
@@ -48,12 +47,6 @@ class MemoryStore:
         self._data[key] = (str(value), item[1])
         return value
 
-    async def decr(self, key: str) -> int:
-        item = self._alive(key)
-        value = int(item[0]) - 1 if item else -1
-        self._data[key] = (str(value), item[1] if item else None)
-        return value
-
     async def ping(self) -> bool:
         return True
 
@@ -85,9 +78,6 @@ class RedisStore:
             value, *_ = await pipe.execute()
         return int(value)
 
-    async def decr(self, key: str) -> int:
-        return int(await self._r.decr(key))
-
     async def ping(self) -> bool:
         try:
             return bool(await self._r.ping())
@@ -99,4 +89,4 @@ class RedisStore:
 
 
 def make_store(redis_url: str) -> KVStore:
-    return RedisStore(redis_url) if redis_url else MemoryStore()
+    return MemoryStore() if redis_url.startswith("memory://") else RedisStore(redis_url)

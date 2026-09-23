@@ -1,6 +1,7 @@
 """Định tuyến theo intent (xem docs/routing.md).
 
-Router chính là Jev. Khi Jev lỗi, timeout hoặc chưa cấu hình, dùng bộ phân loại embedding.
+Router chính là Jev, gọi qua OpenRouter (System One API). Khi Jev lỗi hoặc timeout, dùng bộ phân loại
+embedding.
 Cả hai cùng lỗi thì gán `large`: tốn thêm chút tiền vẫn tốt hơn trả lời sai học thuật.
 """
 
@@ -16,6 +17,7 @@ import numpy as np
 
 from app.config import Settings
 from app.embeddings import Embedder
+from app.llm.openrouter import OpenRouterClient
 from app.llm.types import LLMError
 
 log = logging.getLogger(__name__)
@@ -104,36 +106,26 @@ class Classifier(Protocol):
 class JevClassifier:
     name = "jev"
 
-    def __init__(self, settings: Settings, client: Any | None = None):
+    def __init__(self, settings: Settings, client: OpenRouterClient):
         self.threshold = settings.jev_confidence_threshold
         self.timeout = settings.jev_timeout_seconds
-        if client is None:
-            from typesafe_sdk import AsyncTypeSafeClient, RetryPolicy
-
-            # Không retry: timeout 800ms là cho cả lần gọi, lỗi thì chuyển sang dự phòng ngay.
-            client = AsyncTypeSafeClient(
-                api_key=settings.typesafe_api_key,
-                model=settings.jev_model,  # ghim version: ngưỡng confidence tune theo version
-                retry=RetryPolicy(max_retries=0),
-                timeout=self.timeout,
-            )
+        self.model = settings.jev_model
         self.client = client
 
     async def classify(self, question: str, embedding: EmbeddingInput) -> Classification:
+        # Không retry: timeout 800ms là cho cả lần gọi, lỗi thì chuyển sang dự phòng ngay.
         r = await asyncio.wait_for(
-            self.client.system_one(state={"question": question}, questions=JEV_QUESTIONS),
+            self.client.system_one(self.model, {"question": question}, JEV_QUESTIONS, timeout=self.timeout),
             timeout=self.timeout,
         )
-        intent = r.choices["intent"]
+        answers = r["answers"]
+        intent = answers["intent"]
         return Classification(
-            intent=intent.choice,
-            confidence=float(intent.confidence),
-            needs_context=float(r.nouls["needs_context"].noul),
+            intent=intent["choice"],
+            confidence=float(intent["confidence"]),
+            needs_context=float(answers["needs_context"]["noul"]),
             backend=self.name,
         )
-
-    async def aclose(self) -> None:
-        await self.client.aclose()
 
 
 # Từ ngữ nhắc tới lượt trước, có cả dạng không dấu. Chỉ là heuristic cho router dự phòng.
@@ -240,17 +232,11 @@ class IntentRouter:
         return any(isinstance(c, EmbeddingClassifier) for c in self.classifiers)
 
 
-def build_router(settings: Settings, embedder: Embedder | None) -> IntentRouter:
+def build_router(settings: Settings, client: OpenRouterClient, embedder: Embedder | None) -> IntentRouter:
     classifiers: list[Classifier] = []
     for backend in (settings.router_backend, settings.router_fallback):
         if backend == "jev" and not any(isinstance(c, JevClassifier) for c in classifiers):
-            if not settings.typesafe_api_key:
-                log.warning("Chưa có TYPESAFE_API_KEY, bỏ qua Jev")
-                continue
-            try:
-                classifiers.append(JevClassifier(settings))
-            except ImportError:
-                log.warning("Chưa cài typesafe-sdk (pip install '.[jev]'), bỏ qua Jev")
+            classifiers.append(JevClassifier(settings, client))
         elif backend == "embedding" and embedder and not any(
             isinstance(c, EmbeddingClassifier) for c in classifiers
         ):

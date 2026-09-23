@@ -10,16 +10,23 @@
 import argparse
 import asyncio
 import json
+import os
 import sys
 import time
 from datetime import date
+from pathlib import Path
 
-from app.config import get_settings
+from app.config import ROOT_DIR, get_settings
 from app.prompt_builder import CHECKSUM_FILE, VERSION_FILE, compute_checksum, load_knowledge
 
 
+def _knowledge_dir() -> Path:
+    # Lệnh `knowledge` chạy được trong CI mà không cần API key, nên không đọc toàn bộ Settings.
+    return Path(os.environ.get("KNOWLEDGE_DIR") or ROOT_DIR / "knowledge")
+
+
 def knowledge_check() -> int:
-    d = get_settings().knowledge_dir
+    d = _knowledge_dir()
     recorded = (d / CHECKSUM_FILE).read_text().strip() if (d / CHECKSUM_FILE).exists() else ""
     actual = compute_checksum(d)
     if recorded != actual:
@@ -34,7 +41,7 @@ def knowledge_check() -> int:
 
 
 def knowledge_bump(version: str | None) -> int:
-    d = get_settings().knowledge_dir
+    d = _knowledge_dir()
     current = (d / VERSION_FILE).read_text().strip() if (d / VERSION_FILE).exists() else ""
     if not version:
         today = date.today().isoformat()
@@ -47,7 +54,7 @@ def knowledge_bump(version: str | None) -> int:
 
 
 def knowledge_info() -> int:
-    k = load_knowledge(get_settings().knowledge_dir)
+    k = load_knowledge(_knowledge_dir())
     han = sum(1 for ch in k.text if "一" <= ch <= "鿿")
     # Ước lượng thô: ~1 token cho 1–1.5 chữ Hán, ~3 ký tự Latin (tiếng Việt) cho 1 token.
     est = int(han / 1.2 + (len(k.text) - han) / 3)
