@@ -1,0 +1,159 @@
+# ==============================================================================
+# Byte-compiled / optimized / C-extensions
+# ==============================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# ==============================================================================
+# Virtual Environments (uv, poetry, pipenv, venv, conda)
+# ==============================================================================
+.venv/
+venv/
+ENV/
+env/
+env.bak/
+venv.bak/
+.conda/
+
+# ==============================================================================
+# Environment variables and secrets
+# ==============================================================================
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+secrets.json
+
+# ==============================================================================
+# Distribution / Packaging
+# ==============================================================================
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# ==============================================================================
+# Jupyter Notebooks & Data Science
+# ==============================================================================
+.ipynb_checkpoints/
+*-checkpoint.ipynb
+.virtual_documents/
+
+# ==============================================================================
+# Machine Learning & AI Artifacts (Models, Checkpoints, Logs)
+# ==============================================================================
+# Common large model weights and checkpoints (uncomment as needed)
+*.pt
+*.pth
+*.safetensors
+*.bin
+*.onnx
+*.ckpt
+*.h5
+*.pkl
+*.joblib
+
+# Experiment tracking & logs
+wandb/
+mlruns/
+lightning_logs/
+runs/
+logs/
+*.log
+
+# Caches for Hugging Face, models, and embeddings
+.cache/
+hf_cache/
+cache/
+
+# Data folders (raw / processed large datasets)
+data/
+datasets/
+*.parquet
+*.feather
+
+# ==============================================================================
+# Testing, Coverage, and Linting
+# ==============================================================================
+.pytest_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+
+# Type checkers & linters
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+.ruff_cache/
+
+# ==============================================================================
+# IDEs and Editors
+# ==============================================================================
+# Visual Studio Code
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.code-workspace
+
+# JetBrains (PyCharm, IntelliJ, etc.)
+.idea/
+
+# Sublime Text / Vim / Emacs
+*.sublime-workspace
+*.sublime-project
+*.swp
+*.swo
+*~
+.#*
+\#*#
+
+# ==============================================================================
+# Operating System Files
+# ==============================================================================
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+[Dd]esktop.ini
+$RECYCLE.BIN/
