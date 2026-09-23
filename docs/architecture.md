@@ -37,17 +37,17 @@ Giới hạn của CAG là kiến thức phải vừa context và càng dài cà
 
 ## 4. Các thành phần
 
-| Thành phần | Nhiệm vụ | Công nghệ dự kiến |
-|---|---|---|
-| API | `/chat` (stream), `/feedback` | FastAPI |
-| Quota | Giới hạn lượt hỏi theo gói | Redis |
-| Router | Phân loại intent, kiểm tra phụ thuộc ngữ cảnh, lọc câu ngoài phạm vi | Jev; dự phòng `bge-m3` + logistic regression |
-| Prompt builder | Giữ phần đầu prompt cố định từng byte, quản lý `KNOWLEDGE_VERSION` | Module nội bộ |
-| LLM gateway | Gọi nhà cung cấp, retry, dự phòng, chuẩn hóa `usage` | Client tương thích OpenAI |
-| Cache câu trả lời | Khớp tuyệt đối và gần giống | Redis + pgvector |
-| RAG | Tra từ vựng, giáo trình | pgvector hoặc Qdrant, embedding `bge-m3` |
-| Batch job | Tạo sẵn giải thích từ vựng, bài tập | Batch API của nhà cung cấp |
-| Observability | Chi phí mỗi request, tỉ lệ cache hit, phân bố intent | Postgres + Grafana/Metabase |
+| Thành phần | Nhiệm vụ | Hiện tại (MVP) | Dự kiến khi mở rộng |
+|---|---|---|---|
+| API | `/chat` (stream), `/feedback` | FastAPI | |
+| Quota | Giới hạn lượt hỏi theo gói | Redis | |
+| Router | Phân loại intent, kiểm tra phụ thuộc ngữ cảnh, lọc câu ngoài phạm vi | Jev; dự phòng `bge-m3` + so khớp câu mẫu có nhãn | Logistic regression trên dữ liệu thật |
+| Prompt builder | Giữ phần đầu prompt cố định từng byte, quản lý `KNOWLEDGE_VERSION` | Module nội bộ | |
+| LLM gateway | Gọi model theo tầng, dự phòng, chuẩn hóa `usage` | OpenRouter | vLLM tự host (cùng API) |
+| Cache câu trả lời | Khớp tuyệt đối và gần giống | Redis + chỉ mục embedding trong bộ nhớ | Redis + pgvector (khi chạy nhiều worker) |
+| RAG | Tra từ vựng, giáo trình | Chưa có (interface `Retriever`) | pgvector hoặc Qdrant, embedding `bge-m3` |
+| Batch job | Tạo sẵn giải thích từ vựng, bài tập | Chưa có | Batch API của nhà cung cấp |
+| Observability | Chi phí mỗi request, tỉ lệ cache hit, phân bố intent | SQLite + `/stats`, `cag stats` | Postgres + Grafana/Metabase |
 
 ## 5. Thứ tự các phần trong prompt
 
@@ -64,45 +64,46 @@ Giới hạn của CAG là kiến thức phải vừa context và càng dài cà
 
 **Nguyên tắc:** mọi thứ khác nhau giữa các user hoặc các request (ngày giờ, tên, trình độ, đoạn RAG) phải nằm **sau** phần được cache. Xem [caching.md](caching.md).
 
-## 6. LLM gateway
+## 6. LLM gateway (OpenRouter)
 
-Gateway không phụ thuộc vào một nhà cung cấp cụ thể. Mỗi tầng có một danh sách nhà cung cấp theo thứ tự ưu tiên, nhà cung cấp đứng sau là dự phòng.
+Mọi model đều gọi qua **OpenRouter** (API tương thích OpenAI), nên chỉ cần một API key và một client. Mỗi tầng có một danh sách model theo thứ tự ưu tiên, model đứng sau là dự phòng (`app/config.py`, đổi được bằng biến môi trường `TIER_SMALL`, `TIER_LARGE`).
 
-```python
-class LLMProvider(Protocol):
-    def chat(self, model: str, system: str, messages: list[dict], **opts) -> LLMResult: ...
+| Tầng | Model chính | Dự phòng |
+|---|---|---|
+| `small` | `qwen/qwen3.8-flash` (ghim nhà cung cấp `alibaba`) | `deepseek/deepseek-v4-flash` |
+| `large` | `qwen/qwen3.7-plus` (ghim nhà cung cấp `alibaba`) | `deepseek/deepseek-v4-pro` |
 
-PROVIDERS = {
-    "qwen": OpenAICompatProvider(base_url=QWEN_BASE_URL, api_key=...),
-    "deepseek": OpenAICompatProvider(base_url=DEEPSEEK_BASE_URL, api_key=...),
-}
+- **Dự phòng:** gateway chỉ chuyển sang model tiếp theo khi **chưa** stream token nào cho user, và lỗi có thể thử lại (429, 5xx, timeout, 404 không có endpoint). Lỗi 401, 402 (hết credit), 403 (bị moderation chặn) thì dừng luôn. Đã stream một phần mà lỗi thì báo lỗi, không ghép hai câu trả lời.
+- **Giữ cache nóng:** ghim nhà cung cấp bằng `provider.order`, và gửi `session_id = "cag-{KNOWLEDGE_VERSION}"` làm khóa sticky routing, để mọi request dùng chung phần đầu prompt đi tới cùng một nhà cung cấp.
+- **Usage:** OpenRouter luôn trả `usage` ở chunk cuối của stream. Gateway chuẩn hóa về `cached_input_tokens`, `input_tokens` (phần không đọc cache), `cache_write_tokens`, `output_tokens`, `reasoning_tokens`, `cost_usd`. `cost_usd` là số tiền OpenRouter tính thật, không cần tự nhân giá.
+- **Thinking:** tầng `small` gửi `reasoning: {enabled: false}`. Tầng `large` chỉ bật với intent trong `REASONING_INTENTS` (mặc định `grammar`), với `reasoning: {max_tokens: 1024, exclude: true}`. `max_tokens` được cộng thêm phần thinking để câu trả lời không bị cắt.
+- **Dữ liệu:** không gửi thông tin định danh user vào prompt. OpenRouter có `provider.data_collection = "deny"` (biến `OPENROUTER_DATA_COLLECTION`) để chỉ dùng nhà cung cấp không lưu dữ liệu để train. Kiểm tra lại danh sách nhà cung cấp còn lại sau khi bật. Xem mục tuân thủ trong [roadmap.md](roadmap.md).
+- **Tự host về sau:** vLLM có API tương thích OpenAI. Chỉ cần đổi `OPENROUTER_BASE_URL` sang vLLM (chạy với `--enable-prefix-caching`), code không đổi.
+- **Embedding** (`baai/bge-m3`, $0.01/1M token) cũng gọi qua OpenRouter, dùng cho router dự phòng và cache câu trả lời gần giống.
 
-# tầng -> [(nhà cung cấp, model)], theo thứ tự ưu tiên
-TIERS = {
-    "small": [("qwen", QWEN_SMALL), ("deepseek", DEEPSEEK_CHAT)],
-    "large": [("qwen", QWEN_LARGE), ("deepseek", DEEPSEEK_CHAT)],
-}
-```
-
-- `LLMResult` chuẩn hóa `usage` về một dạng chung: `cached_input_tokens`, `input_tokens`, `output_tokens`. Tên trường của mỗi nhà cung cấp khác nhau.
-- Tầng `small` **tắt chế độ thinking**. Tầng `large` chỉ bật thinking với intent cần suy luận (ví dụ `grammar`).
-- **Dữ liệu:** dùng region quốc tế (Alibaba Cloud Singapore), hoặc nhà cung cấp ngoài Trung Quốc cho DeepSeek. Không gửi thông tin định danh user vào prompt. Xem mục tuân thủ trong [roadmap.md](roadmap.md).
-
-## 7. Cấu trúc thư mục dự kiến
+## 7. Cấu trúc thư mục
 
 ```
 cag/
 ├── app/
-│   ├── main.py            # FastAPI: /chat (stream), /feedback
-│   ├── router.py          # Jev + embedding dự phòng
-│   ├── prompt_builder.py  # SYSTEM_BLOCKS, KNOWLEDGE_VERSION
-│   ├── llm/               # gateway, providers, chuẩn hóa usage
+│   ├── main.py            # FastAPI: /chat (SSE), /feedback, /health, /stats, /admin/warmup
+│   ├── service.py         # luồng xử lý một request (mục 3)
+│   ├── container.py       # khởi tạo các thành phần từ Settings
+│   ├── config.py          # cấu hình, đọc từ biến môi trường / .env
+│   ├── router.py          # Jev + bộ phân loại embedding dự phòng, bảng định tuyến
+│   ├── prompt_builder.py  # phần đầu prompt cố định, KNOWLEDGE_VERSION, ghép lượt user
+│   ├── llm/               # openrouter.py (client), gateway.py (tầng + dự phòng), types.py (usage)
 │   ├── answer_cache.py    # khớp tuyệt đối + gần giống
-│   ├── rag.py
-│   └── quota.py
-├── knowledge/             # kiến thức cốt lõi (.md), quản lý bằng git
-├── jobs/batch_generate.py # tạo sẵn nội dung
-├── eval/                  # bộ câu hỏi có nhãn + script chấm
+│   ├── sessions.py        # lịch sử hội thoại, chỉ nối thêm, tóm tắt khi quá 10 lượt
+│   ├── quota.py           # giới hạn lượt hỏi theo gói
+│   ├── usage_log.py       # log mỗi request (SQLite, chuyển Postgres sau)
+│   ├── store.py           # Redis / bộ nhớ trong tiến trình
+│   ├── rag.py             # interface cho giai đoạn 6
+│   ├── cli.py             # cag knowledge check|bump|info, cag warmup, cag stats
+│   └── resources/router_examples.jsonl  # câu mẫu có nhãn cho router embedding
+├── knowledge/             # kiến thức cốt lõi (.md) + VERSION + CHECKSUM
+├── eval/                  # router_eval.py, answer_eval.py, datasets/
+├── tests/
 └── docs/
 ```
 

@@ -13,6 +13,19 @@
 | **6. RAG + Batch** | RAG cho từ vựng HSK và giáo trình. Tạo sẵn nội dung bằng Batch API | |
 | **7. (Tùy chọn) Tự host** | vLLM + Qwen trên GPU, xem [cost.md](cost.md#7-phương-án-tự-host-giai-đoạn-sau) | Đạt điều kiện chuyển trong cost.md |
 
+## Tiến độ (2026-09-23)
+
+| Giai đoạn | Trạng thái |
+|---|---|
+| 0. Dữ liệu và eval | Đã có khung: `eval/router_eval.py`, `eval/answer_eval.py`, bộ mẫu 40 câu router và 13 câu trả lời. **Cần** gom ~300 câu hỏi thật |
+| 1. MVP | Đã làm: `/chat` stream SSE qua OpenRouter, kiến thức cốt lõi, cache phần đầu prompt, log `usage`. **Cần** đo tỉ lệ đọc cache và TTFT với traffic thật |
+| 2. Chọn model | Model mặc định đã cấu hình (xem [architecture.md](architecture.md#6-llm-gateway-openrouter)). **Cần** chạy `answer_eval` với `--judge` để chốt |
+| 3. Router | Đã tích hợp Jev (`typesafe-sdk`), router embedding dự phòng. **Cần** eval trên dữ liệu thật và chọn ngưỡng |
+| 4. Cache câu trả lời + quota | Đã làm: khớp tuyệt đối (Redis), gần giống (chỉ mục trong bộ nhớ), quota theo gói. **Cần** pgvector khi chạy nhiều worker |
+| 5. Gateway dự phòng | Đã làm: dự phòng theo tầng, feedback "chưa hài lòng" hỏi lại bằng `large` |
+| 6. RAG + Batch | Chưa làm, đã có interface `Retriever` |
+| 7. Tự host | Chưa làm. Chỉ cần trỏ `OPENROUTER_BASE_URL` sang vLLM |
+
 ## Tiêu chí chấm câu trả lời (eval)
 
 | Tiêu chí | Cách chấm |

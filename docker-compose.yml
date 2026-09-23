@@ -1,0 +1,17 @@
+services:
+  api:
+    build: .
+    env_file: .env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      WARMUP_ON_STARTUP: "true"
+    ports: ["8000:8000"]
+    volumes: ["usage:/srv/data"]
+    depends_on: [redis]
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: ["redis:/data"]
+volumes:
+  usage:
+  redis:

@@ -36,13 +36,16 @@ Mô tả các lựa chọn (`criteria`) viết bằng **tiếng Anh**, vì đây
 | `correction` | Chữa câu hoặc đoạn văn user tự viết | large | ❌ (mang tính cá nhân) | ~1.200 token |
 | `off_topic` | Không liên quan tới học tiếng Trung | câu mẫu | — | — |
 | confidence < ngưỡng | Router không chắc chắn | large | ❌ | ~1.000 token |
-| Jev lỗi hoặc timeout | | large | ❌ | ~1.000 token |
+| Jev lỗi hoặc timeout | Chuyển sang router embedding (`bge-m3` + câu mẫu có nhãn) | theo kết quả router embedding | theo intent | theo intent |
+| Cả hai router lỗi | | large | ❌ | ~1.000 token |
 
 **Nguyên tắc an toàn:** khi không chắc chắn thì luôn chọn `large`. Tốn thêm chút tiền vẫn tốt hơn trả lời sai học thuật.
 
 **Quyền dùng model đắt kiểm tra bằng code** theo gói của user, không để Jev quyết định. Nội dung user nhập có thể cố tình lái kết quả của router.
 
 ## 4. Code mẫu
+
+Bản rút gọn để minh họa. Code thật ở [app/router.py](../app/router.py): gửi câu hỏi dạng dict, không retry, và có thêm router embedding dự phòng (`EmbeddingClassifier`).
 
 ```python
 import asyncio

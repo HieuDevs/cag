@@ -1,7 +1,7 @@
 # Chi phí
 
 > Mọi con số là **ước lượng để định hướng**. Cần đo lại bằng log token thật sau 1–2 tháng chạy.
-> Giá Claude và Jev tra ngày 2026-09-23. Giá GPU là giá tham khảo. **Giá Qwen và DeepSeek chưa điền, cần tra bảng giá hiện hành.**
+> Giá Claude, Jev, Qwen và DeepSeek tra ngày 2026-09-23 (Qwen và DeepSeek lấy từ API `/models` của OpenRouter). Giá GPU là giá tham khảo.
 
 ## 1. Giả định
 
@@ -26,15 +26,24 @@ chi phí / request = 20K × giá_đọc_cache + 2K × giá_input + 800 × giá_o
 chi phí / tháng   = Σ theo tầng (số request của tầng × chi phí / request của tầng) + router
 ```
 
-## 3. Bảng tính cho Qwen và DeepSeek (cần điền)
+## 3. Bảng tính cho Qwen và DeepSeek (qua OpenRouter)
 
-| Model | Tầng | Giá input / 1M | Giá đọc cache / 1M | Giá output / 1M | Chi phí / request | 300k | 1M |
+Giá mỗi 1M token. OpenRouter tính đúng giá của nhà cung cấp; phí nạp credit của OpenRouter tính riêng, xem openrouter.ai/pricing.
+
+| Model | Tầng | Input | Đọc cache | Output | Chi phí / request | 300k | 1M |
 |---|---|---|---|---|---|---|---|
-| Qwen (bản nhỏ) | small | TBD | TBD | TBD | | | |
-| Qwen (bản lớn) | large | TBD | TBD | TBD | | | |
-| DeepSeek | large / dự phòng | TBD | TBD | TBD | | | |
+| `qwen/qwen3.8-flash` (Alibaba) | small | $0.15 | $0.016 | $0.47 | ~$0.0010 | ~$300 | ~$1.000 |
+| `qwen/qwen3.7-plus` (Alibaba) | large | $0.32 | $0.064 | $1.28 | ~$0.0029 | ~$880 | ~$2.940 |
+| `deepseek/deepseek-v4-flash` | dự phòng small | $0.089 | $0.018 | $0.18 | ~$0.0007 | ~$200 | ~$670 |
+| `deepseek/deepseek-v4-pro` | dự phòng large | $0.96 | $0.080 | $1.91 | ~$0.0050 | ~$1.510 | ~$5.030 |
 
-Với cách chia ~70% `small`, ~30% `large`: chi phí trung bình = 0.7 × chi phí `small` + 0.3 × chi phí `large`.
+Giá DeepSeek khác nhau theo nhà cung cấp trên OpenRouter (ví dụ `deepseek-v4-flash` có input từ $0.04 tới $0.21). Bảng dùng giá niêm yết của model.
+
+Với cách chia ~70% `small`, ~30% `large`: 0.7 × $0.0010 + 0.3 × $0.0029 ≈ **$0.0016 mỗi request**, tức **~$475/tháng (300k)** và **~$1.580/tháng (1M)**, chưa trừ phần tiết kiệm từ cache câu trả lời. Ở mức Vừa, chi phí khoảng $0.16 mỗi user mỗi tháng, dưới mục tiêu $0.5.
+
+Kiến thức cốt lõi hiện có khoảng 7.600 token (`cag knowledge info`), ít hơn mức 20K giả định ở trên, nên chi phí thật sẽ thấp hơn bảng. Con số cuối cùng lấy từ `cost_usd` trong log (`cag stats`).
+
+**Embedding** (`baai/bge-m3`, $0.01/1M token): khoảng 30 token mỗi câu hỏi, dưới $1/tháng ở mức 1M request.
 
 ## 4. Tham chiếu: Claude API
 
