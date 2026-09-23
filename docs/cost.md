@@ -41,7 +41,7 @@ Giá DeepSeek khác nhau theo nhà cung cấp trên OpenRouter (ví dụ `deepse
 
 Với cách chia ~70% `small`, ~30% `large`: 0.7 × $0.0010 + 0.3 × $0.0029 ≈ **$0.0016 mỗi request**, tức **~$475/tháng (300k)** và **~$1.580/tháng (1M)**, chưa trừ phần tiết kiệm từ cache câu trả lời. Ở mức Vừa, chi phí khoảng $0.16 mỗi user mỗi tháng, dưới mục tiêu $0.5.
 
-Kiến thức cốt lõi hiện có khoảng 7.600 token (`cag knowledge info`), ít hơn mức 20K giả định ở trên, nên chi phí thật sẽ thấp hơn bảng. Con số cuối cùng lấy từ `cost_usd` trong log (`cag stats`).
+Kiến thức cốt lõi hiện có khoảng 7.600 token (`GET /health`), ít hơn mức 20K giả định ở trên, nên chi phí thật sẽ thấp hơn bảng. Con số cuối cùng lấy từ `cost_usd` trong log (`GET /stats`).
 
 **Embedding** (`baai/bge-m3`, $0.01/1M token): khoảng 30 token mỗi câu hỏi, dưới $1/tháng ở mức 1M request.
 

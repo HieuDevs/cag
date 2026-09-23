@@ -47,7 +47,7 @@ Giới hạn của CAG là kiến thức phải vừa context và càng dài cà
 | Cache câu trả lời | Khớp tuyệt đối và gần giống | Redis + chỉ mục embedding trong bộ nhớ | Redis + pgvector (khi chạy nhiều worker) |
 | RAG | Tra từ vựng, giáo trình | Chưa có (interface `Retriever`) | pgvector hoặc Qdrant, embedding `bge-m3` |
 | Batch job | Tạo sẵn giải thích từ vựng, bài tập | Chưa có | Batch API của nhà cung cấp |
-| Observability | Chi phí mỗi request, tỉ lệ cache hit, phân bố intent | SQLite + `/stats`, `cag stats` | Postgres + Grafana/Metabase |
+| Observability | Chi phí mỗi request, tỉ lệ cache hit, phân bố intent | SQLite + `/requests`, `/stats` | Postgres + Grafana/Metabase |
 
 ## 5. Thứ tự các phần trong prompt
 
@@ -88,7 +88,7 @@ Mọi model đều gọi qua **OpenRouter** (API tương thích OpenAI), gồm c
 ```
 cag/
 ├── app/
-│   ├── main.py            # FastAPI: /chat (SSE), /feedback, /health, /stats, /admin/warmup
+│   ├── main.py            # FastAPI: /chat (SSE), /feedback, /health, /requests, /stats, /admin/warmup
 │   ├── service.py         # luồng xử lý một request (mục 3)
 │   ├── container.py       # khởi tạo các thành phần từ Settings
 │   ├── config.py          # cấu hình, đọc từ biến môi trường / .env
@@ -100,9 +100,8 @@ cag/
 │   ├── usage_log.py       # log mỗi request (SQLite, chuyển Postgres sau)
 │   ├── store.py           # Redis / bộ nhớ trong tiến trình
 │   ├── rag.py             # interface cho giai đoạn 6
-│   ├── cli.py             # cag knowledge check|bump|info, cag warmup, cag stats
 │   └── resources/router_examples.jsonl  # câu mẫu có nhãn cho router embedding
-├── knowledge/             # kiến thức cốt lõi (.md) + VERSION + CHECKSUM
+├── knowledge/             # kiến thức cốt lõi (.md), version = hash nội dung
 ├── eval/                  # router_eval.py, answer_eval.py, datasets/
 ├── tests/
 └── docs/

@@ -13,9 +13,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-VERSION_FILE = "VERSION"
-CHECKSUM_FILE = "CHECKSUM"
-
 LEVEL_RE = re.compile(r"^HSK(?:[1-6]|7-9)$")
 
 INTENT_HINTS = {
@@ -29,38 +26,29 @@ INTENT_HINTS = {
 
 @dataclass(frozen=True)
 class Knowledge:
+    # 12 ký tự đầu của sha256 nội dung: sửa kiến thức là version tự đổi, cache câu trả lời cũ hết hiệu lực.
     version: str
-    checksum: str
     files: tuple[str, ...]
     text: str
 
-
-def knowledge_files(directory: Path) -> list[Path]:
-    return sorted(p for p in directory.glob("*.md") if p.is_file())
-
-
-def compute_checksum(directory: Path) -> str:
-    h = hashlib.sha256()
-    for path in knowledge_files(directory):
-        h.update(path.name.encode())
-        h.update(b"\0")
-        h.update(path.read_bytes())
-        h.update(b"\0")
-    return h.hexdigest()
+    @property
+    def estimated_tokens(self) -> int:
+        # Ước lượng thô: ~1,2 chữ Hán mỗi token, ~3 ký tự Latin (tiếng Việt) mỗi token.
+        han = sum(1 for ch in self.text if "\u4e00" <= ch <= "\u9fff")
+        return int(han / 1.2 + (len(self.text) - han) / 3)
 
 
 def load_knowledge(directory: Path) -> Knowledge:
-    files = knowledge_files(directory)
+    files = sorted(p for p in directory.glob("*.md") if p.is_file())
     if not files:
         raise RuntimeError(f"Không có file kiến thức nào trong {directory}")
-    version = (directory / VERSION_FILE).read_text(encoding="utf-8").strip()
     # Chuẩn hóa xuống dòng và bỏ khoảng trắng cuối file để kết quả không phụ thuộc editor.
     parts = [p.read_text(encoding="utf-8").replace("\r\n", "\n").strip() for p in files]
+    text = "\n\n---\n\n".join(parts)
     return Knowledge(
-        version=version,
-        checksum=compute_checksum(directory),
+        version=hashlib.sha256(text.encode()).hexdigest()[:12],
         files=tuple(p.name for p in files),
-        text="\n\n---\n\n".join(parts),
+        text=text,
     )
 
 

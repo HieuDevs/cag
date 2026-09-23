@@ -49,7 +49,7 @@ uvicorn app.main:app --reload
 
 **Cấu hình:** `.env.example` liệt kê mọi biến, biến nào cũng có giá trị. Chỉ `OPENROUTER_API_KEY` là bắt buộc (dùng cho model trả lời, Jev và embedding); trống hoặc còn `CHANGE_ME` thì server dừng khi khởi động.
 
-> **Bản test:** chưa có xác thực request và quota theo gói. Sẽ thêm sau.
+> **Bản test:** chưa có xác thực và quota. Mọi request dùng chung `user_id = "test-user"` (`TEST_USER_ID` trong `app/main.py`).
 
 Không có Redis thì đặt `REDIS_URL=memory://`: dữ liệu nằm trong bộ nhớ tiến trình, chỉ hợp cho dev. Chạy đủ bộ với Redis:
 
@@ -63,7 +63,7 @@ Router Jev (`typesafe/jev-1.13`) gọi qua OpenRouter bằng cùng key, không c
 
 ```bash
 curl -N localhost:8000/chat -H 'content-type: application/json' \
-  -d '{"user_id": "u1", "message": "了 và 过 khác nhau thế nào?", "level": "HSK3"}'
+  -d '{"message": "了 và 过 khác nhau thế nào?", "level": "HSK3"}'
 ```
 
 Kết quả là luồng SSE:
@@ -76,20 +76,19 @@ event: done   data: {"model": "qwen/qwen3.7-plus", "usage": {"cached_input_token
 
 | Endpoint | Mô tả |
 |---|---|
-| `POST /chat` | `user_id`, `message`, `session_id` (lấy từ event `meta` để hỏi tiếp), `level` (`HSK1`…`HSK6`, `HSK7-9`), `stream` (mặc định `true`, `false` thì trả JSON) |
-| `POST /feedback` | `request_id`, `user_id`, `rating` (`satisfied`/`unsatisfied`). Thêm `retry: true` để hỏi lại bằng tầng `large` |
-| `GET /health` | Version kiến thức, router đang dùng, model của từng tầng |
+| `POST /chat` | `message`, `session_id` (lấy từ event `meta` để hỏi tiếp), `level` (`HSK1`…`HSK6`, `HSK7-9`), `stream` (mặc định `true`, `false` thì trả JSON) |
+| `POST /feedback` | `request_id`, `rating` (`satisfied`/`unsatisfied`). Thêm `retry: true` để hỏi lại bằng tầng `large` |
+| `GET /health` | Version kiến thức (tự tính từ nội dung `knowledge/`), số token ước lượng, router, model của từng tầng |
+| `GET /requests?limit=20&status=error` | Log từng request, mới nhất trước |
 | `GET /stats?hours=24` | Chi phí, tỉ lệ đọc cache, tỉ lệ hit cache câu trả lời, TTFT p95, phân bố intent/tầng |
 | `POST /admin/warmup` | Làm nóng cache phần đầu prompt cho model chính của mỗi tầng |
 
-### Lệnh quản trị
+Sửa `knowledge/*.md` rồi restart là xong: version tự đổi theo nội dung, cache câu trả lời cũ tự hết hiệu lực.
+
+### Eval và test
 
 | Lệnh | Mô tả |
 |---|---|
-| `cag knowledge bump` | Chạy sau khi sửa `knowledge/`: tăng `KNOWLEDGE_VERSION`, ghi checksum. CI chạy `cag knowledge check` |
-| `cag knowledge info` | Số file và số token ước lượng của kiến thức cốt lõi |
-| `cag warmup` | Làm nóng cache sau deploy |
-| `cag stats --hours 24` | Chỉ số từ log |
 | `python -m eval.router_eval` | Eval router: độ chính xác, tỉ lệ câu khó bị đẩy sang `small`, quét ngưỡng confidence |
 | `python -m eval.answer_eval --judge anthropic/claude-sonnet-5` | Chạy bộ câu hỏi qua toàn bộ pipeline, chấm tự động và bằng model (gọi API thật, tốn tiền) |
 | `pytest` | Test, không cần API key (OpenRouter được giả lập) |

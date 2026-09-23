@@ -21,7 +21,7 @@ Vì vậy code **không tự cache KV**. Việc của code là làm cho KV cache
 | Phần system + kiến thức build một lần, giống nhau từng byte cho mọi request | `app/prompt_builder.py` |
 | Ghim nhà cung cấp (`provider.order`) và gửi `session_id` cố định theo `KNOWLEDGE_VERSION`, để mọi request tới cùng nơi đang giữ cache | `app/llm/openrouter.py`, `app/service.py` |
 | Ghi `cached_tokens` của từng request để đo tỉ lệ trúng cache thật | `app/usage_log.py`, `/stats` |
-| Làm nóng cache sau deploy | `cag warmup`, `WARMUP_ON_STARTUP` |
+| Làm nóng cache sau deploy | `POST /admin/warmup`, `WARMUP_ON_STARTUP` |
 
 Khi tự host bằng vLLM với `--enable-prefix-caching`, vLLM giữ KV của phần đầu dùng chung giữa các request (giống `DynamicCache` nhưng dùng được cho nhiều request song song). Code chỉ cần đổi `OPENROUTER_BASE_URL`.
 
@@ -36,7 +36,7 @@ Cache của nhà cung cấp hoạt động theo kiểu **khớp phần đầu (p
 1. Phần đầu prompt (`SYSTEM_BLOCKS`) được build **một lần** lúc khởi động, từ file trong `knowledge/`. Không build lại theo từng request.
 2. **Không** chèn vào phần đầu prompt: ngày giờ, tên hay ID user, trình độ, request ID, hay đoạn RAG.
 3. Mọi dữ liệu có cấu trúc đưa vào prompt phải được serialize cố định: `json.dumps(..., sort_keys=True)`, và sắp xếp list theo thứ tự cố định.
-4. Muốn thay đổi kiến thức thì tăng `KNOWLEDGE_VERSION`, deploy, rồi làm nóng cache.
+4. `KNOWLEDGE_VERSION` tự tính từ nội dung `knowledge/*.md`. Sửa kiến thức thì deploy rồi làm nóng cache.
 5. Mỗi model có cache riêng. Tầng `small` và `large` mỗi bên tự ghi cache của mình, đây là hành vi bình thường.
 
 **Kiểm tra điều kiện của từng nhà cung cấp** (độ dài tối thiểu để được cache, thời gian sống của cache, giá khi trúng cache) trong tài liệu chính thức của Qwen và DeepSeek trước khi chốt. Các điều kiện này khác nhau giữa các nhà cung cấp và thay đổi theo thời gian.
@@ -85,7 +85,7 @@ Cache của nhà cung cấp thường chỉ dùng được sau khi request đầ
 | `json.dumps` không `sort_keys` | Thứ tự key thay đổi ngẫu nhiên nên mất cache | `sort_keys=True` |
 | Đoạn RAG đặt trước kiến thức cốt lõi | Mất cache toàn bộ phần kiến thức | RAG đặt sau phần được cache |
 | Cắt lịch sử bằng cửa sổ trượt | Mất cache lịch sử ở mỗi lượt | Xem mục 2 |
-| Sửa file trong `knowledge/` mà không tăng version | Cache câu trả lời trả về nội dung cũ | CI chạy `cag knowledge check`: checksum của `knowledge/*.md` phải khớp `knowledge/CHECKSUM`. Sửa kiến thức xong chạy `cag knowledge bump` |
+| Sửa file trong `knowledge/` mà version không đổi | Cache câu trả lời trả về nội dung cũ | Không xảy ra: version là hash của nội dung kiến thức |
 | Cache câu trả lời cho `correction` | User A nhận câu trả lời dành cho user B | Chỉ cache intent có `cacheable = true` |
 
 ## 6. Giám sát

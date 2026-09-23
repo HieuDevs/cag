@@ -1,4 +1,4 @@
-"""FastAPI: `/chat` (stream SSE), `/feedback`, `/health`, `/stats`, `/admin/warmup`.
+"""FastAPI: `/chat` (stream SSE), `/feedback`, `/health`, `/stats`, `/requests`, `/admin/warmup`.
 
 Bản test: chưa có xác thực và quota. Cấu hình đọc trong `lifespan`, thiếu biến bắt buộc thì dừng khi start.
 """
@@ -10,7 +10,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any, Literal
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -20,9 +20,11 @@ from app.service import ChatInput, Event, ServiceError
 
 log = logging.getLogger(__name__)
 
+# Bản test: chưa có xác thực, mọi request dùng chung một user.
+TEST_USER_ID = "test-user"
+
 
 class ChatBody(BaseModel):
-    user_id: str = Field(min_length=1, max_length=128)
     message: str = Field(min_length=1, max_length=4000)
     session_id: str | None = Field(default=None, max_length=64)
     level: str | None = Field(default=None, description="HSK1…HSK6 hoặc HSK7-9")
@@ -31,7 +33,6 @@ class ChatBody(BaseModel):
 
 class FeedbackBody(BaseModel):
     request_id: str = Field(min_length=1, max_length=64)
-    user_id: str = Field(min_length=1, max_length=128)
     rating: Literal["satisfied", "unsatisfied"]
     # `true`: hỏi lại bằng tầng `large` và stream câu trả lời mới.
     retry: bool = False
@@ -63,15 +64,15 @@ def create_app(settings: Settings | None = None, container: Container | None = N
     @app.post("/chat")
     async def chat(body: ChatBody, c: Container = Depends(get_container)):
         events = c.service.chat(ChatInput(
-            user_id=body.user_id, message=body.message, session_id=body.session_id, level=body.level,
+            user_id=TEST_USER_ID, message=body.message, session_id=body.session_id, level=body.level,
         ))
         return _sse(events) if body.stream else await _collect(events)
 
     @app.post("/feedback")
     async def feedback(body: FeedbackBody, c: Container = Depends(get_container)):
-        await c.service.feedback(body.request_id, body.user_id, body.rating)
+        await c.service.feedback(body.request_id, TEST_USER_ID, body.rating)
         if body.rating == "unsatisfied" and body.retry:
-            events = c.service.retry(body.request_id, body.user_id)
+            events = c.service.retry(body.request_id, TEST_USER_ID)
             # Lấy event đầu trước khi mở stream, để lỗi (404, 409) trả về đúng HTTP status.
             first = await anext(events)
             events = _prepend(first, events)
@@ -80,9 +81,10 @@ def create_app(settings: Settings | None = None, container: Container | None = N
 
     @app.get("/health")
     async def health(c: Container = Depends(get_container)) -> dict[str, Any]:
+        k = c.service.prompt.knowledge
         return {
             "ok": await c.store.ping(),
-            "knowledge_version": c.service.prompt.version,
+            "knowledge": {"version": k.version, "files": k.files, "estimated_tokens": k.estimated_tokens},
             "router": [clf.name for clf in c.router.classifiers],
             "tiers": {t: [m.model for m in ms] for t, ms in c.service.gateway.tiers.items()},
         }
@@ -90,6 +92,15 @@ def create_app(settings: Settings | None = None, container: Container | None = N
     @app.get("/stats")
     async def stats(hours: float = 24, c: Container = Depends(get_container)) -> dict[str, Any]:
         return await c.usage_log.stats(time.time() - hours * 3600)
+
+    @app.get("/requests")
+    async def requests(
+        limit: int = Query(20, ge=1, le=500),
+        status: str | None = Query(None, description="ok | error | canned | aborted"),
+        c: Container = Depends(get_container),
+    ) -> list[dict[str, Any]]:
+        """Log từng request, mới nhất trước."""
+        return await c.usage_log.recent(limit, status)
 
     @app.post("/admin/warmup")
     async def warmup(c: Container = Depends(get_container)) -> list[dict[str, Any]]:

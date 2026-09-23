@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS requests (
     cost_usd REAL,
     ttft_ms REAL,
     latency_ms REAL,
-    status TEXT NOT NULL,            -- ok | error | canned
+    status TEXT NOT NULL,            -- ok | error | canned | aborted
     error TEXT,
     feedback TEXT
 );
@@ -147,6 +147,18 @@ class UsageLog:
             "ttft_p95_ms": ttfts[min(len(ttfts) - 1, int(len(ttfts) * 0.95))] if ttfts else None,
             "by_intent_tier": [dict(r) for r in by],
         }
+
+    def _recent(self, limit: int, status: str | None) -> list[dict[str, Any]]:
+        sql = "SELECT datetime(ts, 'unixepoch', 'localtime') AS time, * FROM requests"
+        args: tuple = ()
+        if status:
+            sql, args = sql + " WHERE status = ?", (status,)
+        with self._lock:
+            rows = self._conn.execute(sql + " ORDER BY ts DESC LIMIT ?", (*args, limit)).fetchall()
+        return [dict(r) for r in rows]
+
+    async def recent(self, limit: int = 20, status: str | None = None) -> list[dict[str, Any]]:
+        return await asyncio.to_thread(self._recent, limit, status)
 
     async def stats(self, since: float) -> dict[str, Any]:
         return await asyncio.to_thread(self._stats, since)

@@ -39,7 +39,7 @@ flowchart TD
 
 Code của cả luồng nằm trong `ChatService.chat()` ở [app/service.py](../app/service.py). API ([app/main.py](../app/main.py)) chỉ chuyển luồng event thành SSE.
 
-> **Bản test:** chưa có xác thực request và quota theo gói, sẽ thêm sau.
+> **Bản test:** chưa có xác thực và quota. API dùng chung `user_id = "test-user"` (`TEST_USER_ID` trong `app/main.py`) cho mọi request.
 
 ## 2. Khởi động
 
@@ -53,7 +53,7 @@ Khi chạy `uvicorn app.main:app`:
 
 | Bước | Thành phần | Làm gì lúc khởi động |
 |---|---|---|
-| 1 | `load_knowledge()` | Đọc `knowledge/*.md` theo thứ tự tên file, nối lại bằng `\n\n---\n\n`, đọc `knowledge/VERSION` làm `KNOWLEDGE_VERSION` |
+| 1 | `load_knowledge()` | Đọc `knowledge/*.md` theo thứ tự tên file, nối lại bằng `\n\n---\n\n`, `KNOWLEDGE_VERSION` = 12 ký tự đầu sha256 của nội dung |
 | 2 | `PromptBuilder` | Tạo **một lần** object system message từ phần kiến thức. Mọi request dùng lại đúng object này, nên phần đầu prompt giống nhau từng byte |
 | 3 | `OpenRouterClient` | Tạo `httpx.AsyncClient` tới `OPENROUTER_BASE_URL`, timeout 60s (kết nối 5s), header `Authorization`, `HTTP-Referer`, `X-Title` |
 | 4 | `Embedder` | Bọc API `/embeddings` của OpenRouter (`baai/bge-m3`), có LRU 2.048 câu trong bộ nhớ |
@@ -74,7 +74,6 @@ Khi tắt, `Container.aclose()` đóng client HTTP (dùng chung cho chat, Jev v�
 
 ```json
 {
-  "user_id": "u123",
   "message": "了 và 过 khác nhau thế nào?",
   "session_id": null,
   "level": "HSK3",
@@ -84,7 +83,6 @@ Khi tắt, `Container.aclose()` đóng client HTTP (dùng chung cho chat, Jev v�
 
 | Trường | Ràng buộc | Ghi chú |
 |---|---|---|
-| `user_id` | 1–128 ký tự | Do backend chính gửi sang sau khi đã xác thực user |
 | `message` | 1–4.000 ký tự | Sai thì trả 422 |
 | `session_id` | tối đa 64 ký tự | Lấy từ event `meta` của lần trước để hỏi tiếp trong cùng phiên |
 | `level` | `HSK1`…`HSK6`, `HSK7-9` | Chuẩn hóa: `"hsk 3"` → `HSK3`. Giá trị khác thì bỏ qua |
@@ -307,7 +305,7 @@ sequenceDiagram
     participant A as API
     participant S as ChatService
     participant K as Store
-    C->>A: POST /feedback {request_id, user_id, rating: "unsatisfied", retry: true}
+    C->>A: POST /feedback {request_id, rating: "unsatisfied", retry: true}
     A->>S: feedback()
     S->>K: đọc req:{request_id}, kiểm tra đúng user_id (sai → 404)
     S->>S: ghi feedback vào bảng requests
@@ -364,7 +362,7 @@ Các cột chính của bảng `requests` ([app/usage_log.py](../app/usage_log.p
 | Hiệu năng | `ttft_ms`, `latency_ms` |
 | Kết quả | `status` (`ok`/`error`/`canned`/`aborted`), `error`, `feedback` |
 
-`GET /stats?hours=24` hoặc `cag stats --hours 24` tính từ bảng này:
+Xem từng dòng: `curl "localhost:8000/requests?limit=20"` (lọc lỗi: `&status=error`). Số liệu tổng hợp: `curl "localhost:8000/stats?hours=24"`:
 
 | Chỉ số | Cách tính | Mục tiêu (architecture.md mục 8) |
 |---|---|---|
@@ -415,21 +413,16 @@ Kiểm tra: `curl localhost:8000/health` trả version kiến thức, router đa
 
 ### Test
 
-`pytest` chạy 96 test, **không cần API key**:
+`pytest` chạy 98 test, **không cần API key**:
 
 - `tests/conftest.py` giả lập OpenRouter bằng `httpx.MockTransport` (stream SSE, lỗi HTTP, embedding) và có `ScriptedBackend` cho test service.
-- Nhóm test chính: prompt giữ nguyên từng byte, checksum kiến thức, chuẩn hóa usage, dự phòng giữa model, bảng định tuyến, cache khớp tuyệt đối và gần giống, cấu hình `.env.example`, tóm tắt phiên, feedback và hỏi lại, API SSE và mã lỗi.
+- Nhóm test chính: prompt giữ nguyên từng byte, version kiến thức theo nội dung, chuẩn hóa usage, dự phòng giữa model, bảng định tuyến, cache khớp tuyệt đối và gần giống, cấu hình `.env.example`, tóm tắt phiên, feedback và hỏi lại, API SSE và mã lỗi.
 
 ### Sửa kiến thức
 
-```bash
-# sửa knowledge/*.md
-cag knowledge info      # xem số token ước lượng
-cag knowledge bump      # tăng VERSION (YYYY-MM-DD.N), ghi CHECKSUM
-# commit cả file .md, VERSION và CHECKSUM
-```
+Sửa `knowledge/*.md` rồi restart. `KNOWLEDGE_VERSION` tự đổi theo nội dung nên cache câu trả lời cũ tự hết hiệu lực. Xem version và số token: `curl localhost:8000/health`.
 
-CI ([.github/workflows/ci.yml](../.github/workflows/ci.yml)) chạy `ruff`, `cag knowledge check` và `pytest`. Sửa `.md` mà quên `bump` thì CI fail, để cache câu trả lời không trả nội dung cũ.
+CI ([.github/workflows/ci.yml](../.github/workflows/ci.yml)) chạy `ruff` và `pytest`.
 
 ### Deploy
 
@@ -439,7 +432,7 @@ docker compose up --build
 
 - `docker-compose.yml` có 2 service: `api` (image từ `Dockerfile`, bật `WARMUP_ON_STARTUP`) và `redis` (bật AOF). Log SQLite nằm trong volume `usage`.
 - Mỗi container chạy **1 worker uvicorn**, vì chỉ mục cache gần giống nằm trong bộ nhớ tiến trình.
-- Sau mỗi lần deploy hoặc đổi `KNOWLEDGE_VERSION`: warmup chạy tự động lúc khởi động, hoặc gọi `POST /admin/warmup`, hoặc chạy `cag warmup`.
+- Sau mỗi lần deploy hoặc đổi `KNOWLEDGE_VERSION`: warmup chạy tự động lúc khởi động, hoặc gọi `curl -X POST localhost:8000/admin/warmup`.
 
 ### Eval (gọi API thật, tốn tiền)
 
@@ -461,4 +454,4 @@ python -m eval.answer_eval --judge anthropic/claude-sonnet-5   # 13 câu qua to�
 | Tóm tắt phiên chạy đồng bộ ở lượt thứ 11 | Lượt đó chậm thêm một lần gọi LLM | Tóm tắt nền sau lượt thứ 10 |
 | Client ngắt kết nối giữa chừng | Token đã sinh vẫn bị tính tiền nhưng log không có usage | Chấp nhận, theo dõi tỉ lệ `aborted` |
 | Chưa có xác thực và quota | Ai gọi được API đều dùng được, không giới hạn lượt | Thêm sau khi xong bản test |
-| Chưa chạy với OpenRouter thật | Tỉ lệ đọc cache, TTFT và chất lượng chưa được đo | Chạy `cag warmup` và `answer_eval` với key thật |
+| Chưa chạy với OpenRouter thật | Tỉ lệ đọc cache, TTFT và chất lượng chưa được đo | Gọi `POST /admin/warmup` và chạy `answer_eval` với key thật |

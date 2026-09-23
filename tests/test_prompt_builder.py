@@ -2,21 +2,19 @@ import json
 import re
 
 from app.config import ROOT_DIR
-from app.prompt_builder import (
-    CHECKSUM_FILE,
-    PromptBuilder,
-    compute_checksum,
-    load_knowledge,
-    normalize_level,
-)
+from app.prompt_builder import PromptBuilder, load_knowledge, normalize_level
 
 KNOWLEDGE_DIR = ROOT_DIR / "knowledge"
 
 
-def test_knowledge_checksum_matches_version():
-    """CI: sửa knowledge/ thì phải chạy `cag knowledge bump` (tăng KNOWLEDGE_VERSION)."""
-    recorded = (KNOWLEDGE_DIR / CHECKSUM_FILE).read_text().strip()
-    assert recorded == compute_checksum(KNOWLEDGE_DIR), "Chạy `cag knowledge bump` sau khi sửa knowledge/"
+def test_knowledge_version_follows_content(tmp_path):
+    (tmp_path / "a.md").write_text("# A\nnội dung\n")
+    v1 = load_knowledge(tmp_path).version
+    (tmp_path / "a.md").write_text("# A\r\nnội dung\r\n\n")  # chỉ khác xuống dòng: prompt không đổi
+    assert load_knowledge(tmp_path).version == v1
+    (tmp_path / "a.md").write_text("# A\nnội dung mới\n")
+    assert load_knowledge(tmp_path).version != v1
+    assert len(v1) == 12
 
 
 def test_system_prefix_is_byte_stable():
