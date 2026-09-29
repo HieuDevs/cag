@@ -39,6 +39,13 @@ class Embedder:
             self._lru.popitem(last=False)
         return vec
 
+    @property
+    def lru_stats(self) -> dict[str, int]:
+        return {"size": len(self._lru), "capacity": self._lru_size}
+
+    def clear(self) -> None:
+        self._lru.clear()
+
 
 def _l2_normalize(m: np.ndarray) -> np.ndarray:
     norms = np.linalg.norm(m, axis=1, keepdims=True)

@@ -32,13 +32,13 @@ class Example:
 
 
 def true_tier(intent: str) -> str:
-    return "canned" if intent == "off_topic" else ROUTES[intent][0]
+    return ROUTES[intent][0]
 
 
 def metrics(examples: list[Example], preds: list[Classification | None], threshold: float) -> dict:
     router = IntentRouter([])
     n = len(examples)
-    correct = hard_to_small = large = canned_wrong = errors = ctx_correct = 0
+    correct = hard_to_small = large = off_topic_wrong = errors = ctx_correct = 0
     hard_total = sum(1 for e in examples if true_tier(e.intent) == "large")
     for e, p in zip(examples, preds, strict=True):
         if p is None:  # router lỗi -> hệ thống gán large
@@ -51,15 +51,16 @@ def metrics(examples: list[Example], preds: list[Classification | None], thresho
         large += route.tier == "large"
         if true_tier(e.intent) == "large" and route.tier == "small":
             hard_to_small += 1
-        if route.tier == "canned" and e.intent != "off_topic":
-            canned_wrong += 1
+        # Câu tiếng Trung bị coi là ngoài chủ đề: vẫn được trả lời nhưng ngắn và thiếu hướng dẫn định dạng.
+        if route.reason == "off_topic" and e.intent != "off_topic":
+            off_topic_wrong += 1
     return {
         "threshold": threshold,
         "accuracy": correct / n,
         "needs_context_accuracy": ctx_correct / n,
         "hard_to_small_rate": hard_to_small / hard_total if hard_total else 0.0,
         "large_rate": large / n,
-        "wrongly_canned": canned_wrong,
+        "wrongly_off_topic": off_topic_wrong,
         "errors": errors,
     }
 
@@ -88,11 +89,11 @@ async def run_classifier(clf, examples: list[Example], concurrency: int = 8) -> 
 def print_report(name: str, examples, preds, default_threshold: float) -> dict:
     print(f"\n=== {name} ({len(examples)} câu) ===")
     rows = [metrics(examples, preds, t) for t in sorted({*THRESHOLDS, default_threshold})]
-    print(f"{'ngưỡng':>7} {'đúng intent':>12} {'khó→small':>10} {'tỉ lệ large':>12} {'canned sai':>11} {'lỗi':>5}")
+    print(f"{'ngưỡng':>7} {'đúng intent':>12} {'khó→small':>10} {'tỉ lệ large':>12} {'off_topic sai':>14} {'lỗi':>5}")
     for r in rows:
         mark = " ←" if r["threshold"] == default_threshold else ""
         print(f"{r['threshold']:>7.2f} {r['accuracy']:>12.1%} {r['hard_to_small_rate']:>10.1%} "
-              f"{r['large_rate']:>12.1%} {r['wrongly_canned']:>11} {r['errors']:>5}{mark}")
+              f"{r['large_rate']:>12.1%} {r['wrongly_off_topic']:>14} {r['errors']:>5}{mark}")
     ok = [r for r in rows if r["hard_to_small_rate"] < 0.03]
     if ok:
         best = min(ok, key=lambda r: r["large_rate"])

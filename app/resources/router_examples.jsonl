@@ -44,6 +44,14 @@
 {"text": "Kể về lịch sử nhà Đường", "intent": "culture"}
 {"text": "Ý nghĩa của màu đỏ trong văn hóa Trung Hoa", "intent": "culture"}
 {"text": "Bài thơ 静夜思 của Lý Bạch nói về gì", "intent": "culture"}
+{"text": "Lộ trình học tiếng Trung cho người mới bắt đầu", "intent": "study"}
+{"text": "Tự học tiếng Trung thế nào cho hiệu quả?", "intent": "study"}
+{"text": "Ôn thi HSK4 trong 3 tháng nên học gì", "intent": "study"}
+{"text": "Có app hay giáo trình nào học tiếng Trung tốt không", "intent": "study"}
+{"text": "Làm sao nhớ chữ Hán lâu hơn", "intent": "study"}
+{"text": "Các câu hay dùng khi hỏi đường", "intent": "study"}
+{"text": "Mẫu câu gọi món ở nhà hàng Trung Quốc", "intent": "study"}
+{"text": "Luyện nghe tiếng Trung bằng cách nào", "intent": "study"}
 {"text": "Thời tiết Hà Nội hôm nay thế nào?", "intent": "off_topic"}
 {"text": "Viết code Python sắp xếp mảng giúp tôi", "intent": "off_topic"}
 {"text": "Giá bitcoin bây giờ là bao nhiêu", "intent": "off_topic"}

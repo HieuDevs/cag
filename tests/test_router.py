@@ -41,7 +41,8 @@ def cls(intent, conf=0.9, ctx=0.1, backend="stub"):
     (cls("grammar"), "large", True, "grammar"),
     (cls("culture"), "large", True, "culture"),
     (cls("correction"), "large", False, "correction"),
-    (cls("off_topic"), "canned", False, "off_topic"),
+    (cls("study"), "small", True, "study"),
+    (cls("off_topic"), "small", False, "off_topic"),
     (cls("lookup", conf=0.3), "large", False, "low_confidence"),
     (cls("off_topic", conf=0.3), "large", False, "low_confidence"),
     (cls("lookup", ctx=0.8), "small", False, "lookup"),
@@ -56,7 +57,7 @@ async def test_low_confidence_uses_default_output_budget():
     r = await IntentRouter([StubClassifier("s", cls("lookup", conf=0.1))]).route("q")
     assert r.intent is None and r.max_tokens == 1000
     r = await IntentRouter([StubClassifier("s", cls("lookup"))]).route("q")
-    assert r.max_tokens == 300
+    assert r.max_tokens == 600
 
 
 async def test_falls_back_to_next_classifier():
@@ -64,6 +65,8 @@ async def test_falls_back_to_next_classifier():
     emb = StubClassifier("embedding", cls("grammar", backend="embedding"), threshold=0.5)
     r = await IntentRouter([jev, emb]).route("q")
     assert r.reason == "grammar" and r.backend == "embedding" and jev.calls == 1
+    assert [(a["backend"], a["ok"]) for a in r.attempts] == [("jev", False), ("embedding", True)]
+    assert r.attempts[0]["error"].startswith("TimeoutError") and r.attempts[1]["intent"] == "grammar"
 
 
 async def test_all_classifiers_fail_goes_large():

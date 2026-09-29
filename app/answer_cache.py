@@ -68,6 +68,13 @@ class SemanticIndex:
                 del self._vecs[namespace][i]
                 return
 
+    def sizes(self) -> dict[str, int]:
+        return {ns: len(keys) for ns, keys in self._keys.items() if keys}
+
+    def clear(self) -> None:
+        self._keys.clear()
+        self._vecs.clear()
+
     def search(self, namespace: str, vec: np.ndarray, signature: str, threshold: float) -> tuple[str, float] | None:
         vecs = self._vecs.get(namespace)
         if not vecs:

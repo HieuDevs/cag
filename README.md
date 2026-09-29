@@ -18,7 +18,9 @@ Cache câu trả lời (khớp tuyệt đối) ──► Router: Jev (~200ms, ~$
                                                  │
         ┌───────────┬──────────────┬─────────────┼───────────────────┐
     off_topic     small          large       confidence thấp      Jev lỗi
-    câu mẫu     Qwen nhỏ    Qwen lớn / DeepSeek    gán large     router embedding
+   Qwen nhỏ     Qwen nhỏ    Qwen lớn / DeepSeek    gán large     router embedding
+  (trả lời ngắn
+  + từ tiếng Trung)
                   │              │
                   ▼              ▼
           Prompt = [system + kiến thức cố định: CACHE] + [lịch sử] + [câu hỏi]
@@ -44,8 +46,12 @@ Cần Python 3.11+ và một [OpenRouter API key](https://openrouter.ai/keys).
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e '.[dev]'
 cp .env.example .env            # thay CHANGE_ME bằng OPENROUTER_API_KEY
-uvicorn app.main:app --reload
+make run                        # uvicorn --reload, cổng 8000 (đổi bằng PORT=9000)
 ```
+
+Mở `http://localhost:8000/` để vào trang test: chat, xem luồng xử lý từng request, thống kê, request log, bộ nhớ.
+
+Mạng có proxy chặn và kiểm tra HTTPS (ví dụ Fortinet) thì Python báo `CERTIFICATE_VERIFY_FAILED`. Ghép CA của proxy với bundle của `certifi` vào `data/ca-bundle.pem`, `make run` sẽ tự dùng file đó.
 
 **Cấu hình:** `.env.example` liệt kê mọi biến, biến nào cũng có giá trị. Chỉ `OPENROUTER_API_KEY` là bắt buộc (dùng cho model trả lời, Jev và embedding); trống hoặc còn `CHANGE_ME` thì server dừng khi khởi động.
 

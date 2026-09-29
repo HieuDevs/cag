@@ -15,6 +15,8 @@ class KVStore(Protocol):
     async def incr(self, key: str, ttl: int | None = None) -> int: ...
     async def ping(self) -> bool: ...
     async def aclose(self) -> None: ...
+    # Chỉ dùng cho trang debug: liệt kê (key, value, TTL còn lại tính bằng giây) theo prefix.
+    async def scan(self, prefix: str = "") -> list[tuple[str, str, float | None]]: ...
 
 
 class MemoryStore:
@@ -50,6 +52,14 @@ class MemoryStore:
     async def ping(self) -> bool:
         return True
 
+    async def scan(self, prefix: str = "") -> list[tuple[str, str, float | None]]:
+        out = []
+        for key in sorted(self._data):
+            if key.startswith(prefix) and (item := self._alive(key)):
+                ttl = round(item[1] - time.monotonic(), 1) if item[1] is not None else None
+                out.append((key, item[0], ttl))
+        return out
+
     async def aclose(self) -> None:
         return None
 
@@ -77,6 +87,14 @@ class RedisStore:
                 pipe.expire(key, ttl, nx=True)
             value, *_ = await pipe.execute()
         return int(value)
+
+    async def scan(self, prefix: str = "") -> list[tuple[str, str, float | None]]:
+        out = []
+        async for key in self._r.scan_iter(match=f"{prefix}*", count=500):
+            value, ttl = await self._r.get(key), await self._r.ttl(key)
+            if value is not None:
+                out.append((key, value, float(ttl) if ttl >= 0 else None))
+        return sorted(out)
 
     async def ping(self) -> bool:
         try:

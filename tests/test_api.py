@@ -82,3 +82,54 @@ def test_requests_log(client, backend):
     assert [r["status"] for r in client.get("/requests?status=ok").json()] == ["ok"]
     assert len(client.get("/requests?limit=1").json()) == 1
     assert client.get("/requests?limit=0").status_code == 422
+
+
+def test_index_page(client):
+    r = client.get("/")
+    assert r.status_code == 200 and r.headers["content-type"].startswith("text/html")
+    assert "/debug/memory" in r.text
+
+
+def test_debug_memory_and_clear(client):
+    first = client.post("/chat", json={"message": "你好", "level": "HSK1", "stream": False}).json()
+    m = client.get("/debug/memory").json()
+    assert m["backend"] == "memory"
+    assert m["counts"]["session"] == 1 and m["counts"]["req"] == 1 and m["counts"]["answer"] == 1
+    session = next(i for i in m["items"] if i["kind"] == "session")
+    assert session["key"].endswith(first["session_id"]) and len(session["value"]["messages"]) == 2
+    assert session["ttl_s"] > 0
+
+    assert m["counts"]["trace"] == 1
+    assert client.post("/debug/memory/clear").json() == {"deleted": 4}
+    m = client.get("/debug/memory").json()
+    assert m["items"] == [] and m["semantic_index"] == {}
+
+
+def test_debug_knowledge(client):
+    k = client.get("/debug/knowledge").json()
+    assert len(k["version"]) == 12 and k["files"][0] == "00_vai_tro.md" and len(k["text"]) > 1000
+
+
+def test_trace_in_done_event_and_endpoint(client, backend):
+    backend.fail_models = {"qwen/small"}
+    first = client.post("/chat", json={"message": "你好", "stream": False}).json()
+    steps = [(t["step"], t["status"]) for t in first["trace"]]
+    assert steps == [
+        ("session", "ok"), ("exact_cache", "miss"), ("router", "skip"), ("route", "ok"), ("cacheable", "ok"),
+        ("embedding", "ok"), ("semantic_cache", "miss"), ("rag", "skip"), ("prompt", "ok"),
+        ("llm", "fail"), ("llm", "fallback"), ("save", "ok"), ("answer_cache", "ok"),
+    ]
+    assert "qwen/small lỗi (503)" in first["trace"][9]["detail"]
+    assert client.get(f"/debug/trace/{first['request_id']}").json() == first["trace"]
+    assert client.get("/debug/trace/nope").status_code == 404
+
+    again = client.post("/chat", json={"message": "你好", "stream": False}).json()
+    assert [t["step"] for t in again["trace"]] == ["session", "exact_cache", "answer", "save"]
+    assert again["trace"][1]["status"] == "hit"
+
+
+def test_trace_on_error(client, backend):
+    backend.fail_models = {"qwen/small", "deepseek/small"}
+    r = client.post("/chat", json={"message": "你好", "stream": False})
+    trace = r.json()["error"]["trace"]
+    assert [(t["step"], t["status"]) for t in trace[-3:]] == [("llm", "fail")] * 3

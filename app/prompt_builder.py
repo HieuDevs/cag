@@ -21,6 +21,8 @@ INTENT_HINTS = {
     "grammar": "giải thích ngữ pháp",
     "culture": "văn hóa, thành ngữ, cổ văn",
     "correction": "chữa bài viết",
+    "study": "cách học, lộ trình, mẫu câu theo tình huống",
+    "off_topic": "ngoài chủ đề tiếng Trung",
 }
 
 

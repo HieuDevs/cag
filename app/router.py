@@ -3,13 +3,17 @@
 Router chính là Jev, gọi qua OpenRouter (System One API). Khi Jev lỗi hoặc timeout, dùng bộ phân loại
 embedding.
 Cả hai cùng lỗi thì gán `large`: tốn thêm chút tiền vẫn tốt hơn trả lời sai học thuật.
+
+Câu nào cũng được trả lời: câu ngoài tiếng Trung (`off_topic`) đi tầng small, trả lời ngắn và kèm vài từ
+tiếng Trung liên quan (knowledge/00_vai_tro.md).
 """
 
 import asyncio
 import json
 import logging
 import re
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -34,7 +38,11 @@ INTENT_CRITERIA: dict[str, str] = {
     "grammar": "Explain or compare grammar points, particles, measure words or sentence patterns",
     "correction": "Check or correct a sentence or paragraph the learner wrote themselves",
     "culture": "Chinese history, culture, idiom origins or classical Chinese",
-    "off_topic": "Not related to learning Chinese at all",
+    "study": (
+        "How to study Chinese: learning roadmaps, study methods, HSK exam preparation, learning resources, "
+        "or useful phrases for a situation or topic such as asking directions or ordering food"
+    ),
+    "off_topic": "Not related to the Chinese language or to learning Chinese at all",
 }
 INTENTS = tuple(INTENT_CRITERIA)
 
@@ -45,15 +53,20 @@ ROUTES: dict[str, tuple[str, bool]] = {
     "grammar": ("large", True),
     "culture": ("large", True),
     "correction": ("large", False),
+    "study": ("small", True),
+    # Không cache: hay cần dữ liệu thời gian thực (thời tiết, giá cả), để lâu là sai.
+    "off_topic": ("small", False),
 }
 
 # Giới hạn output theo intent (chưa tính phần thinking).
 MAX_OUTPUT_TOKENS: dict[str | None, int] = {
-    "lookup": 300,
-    "translate": 300,
+    "lookup": 600,
+    "translate": 600,
     "grammar": 1000,
     "culture": 1000,
     "correction": 1200,
+    "study": 800,
+    "off_topic": 400,
     None: 1000,
 }
 
@@ -83,13 +96,15 @@ class Classification:
 
 @dataclass
 class Route:
-    tier: str  # "small" | "large" | "canned"
+    tier: str  # "small" | "large"
     cacheable: bool
     reason: str  # intent, hoặc lý do rơi vào `large`
     intent: str | None = None
     confidence: float | None = None
     needs_context: float | None = None
     backend: str = "none"
+    # Từng router đã thử: backend, ngưỡng, thời gian, kết quả hoặc lỗi (hiển thị trong trace).
+    attempts: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def max_tokens(self) -> int:
@@ -205,14 +220,23 @@ class IntentRouter:
         self.needs_context_threshold = needs_context_threshold
 
     async def route(self, question: str, embedding: EmbeddingInput = None) -> Route:
+        attempts: list[dict[str, Any]] = []
         for clf in self.classifiers:
+            started = time.monotonic()
+            attempt: dict[str, Any] = {"backend": clf.name, "threshold": clf.threshold}
+            attempts.append(attempt)
             try:
                 c = await clf.classify(question, embedding)
             except Exception as e:  # noqa: BLE001 - router lỗi kiểu gì cũng chuyển sang dự phòng
                 log.warning("Router %s lỗi: %r", clf.name, e)
+                attempt.update(ok=False, ms=_ms(started), error=f"{type(e).__name__}: {e}"[:300])
                 continue
-            return self.decide(c, clf.threshold)
-        return Route("large", False, "router_unavailable")
+            attempt.update(ok=True, ms=_ms(started), intent=c.intent, confidence=round(c.confidence, 4),
+                           needs_context=round(c.needs_context, 4))
+            route = self.decide(c, clf.threshold)
+            route.attempts = attempts
+            return route
+        return Route("large", False, "router_unavailable", attempts=attempts)
 
     def decide(self, c: Classification, threshold: float) -> Route:
         common = dict(intent=c.intent, confidence=c.confidence, needs_context=c.needs_context, backend=c.backend)
@@ -221,8 +245,6 @@ class IntentRouter:
         if c.confidence < threshold:
             # Không truyền intent xuống: giới hạn output và gợi ý dạng câu hỏi theo mặc định.
             return Route("large", False, "low_confidence", **{**common, "intent": None})
-        if c.intent == "off_topic":
-            return Route("canned", False, "off_topic", **common)
         tier, cacheable = ROUTES[c.intent]
         cacheable = cacheable and c.needs_context < self.needs_context_threshold
         return Route(tier, cacheable, c.intent, **common)
@@ -244,3 +266,7 @@ def build_router(settings: Settings, client: OpenRouterClient, embedder: Embedde
     if not classifiers:
         log.warning("Không có router nào, mọi câu hỏi sẽ vào tầng large")
     return IntentRouter(classifiers, needs_context_threshold=settings.needs_context_threshold)
+
+
+def _ms(started: float) -> float:
+    return round((time.monotonic() - started) * 1000, 1)

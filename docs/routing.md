@@ -32,12 +32,13 @@ Mô tả các lựa chọn (`criteria`) viết bằng **tiếng Anh**, vì đây
 
 | Intent | Mô tả | Tầng | Cache câu trả lời | Output tối đa |
 |---|---|---|---|---|
-| `lookup` | Nghĩa, pinyin, thanh điệu, thứ tự nét, âm Hán Việt của một từ hoặc cụm ngắn | small | ✅ | ~300 token |
-| `translate` | Dịch một câu ngắn Việt ↔ Trung | small | ✅ | ~300 token |
+| `lookup` | Nghĩa, pinyin, thanh điệu, thứ tự nét, âm Hán Việt của một từ hoặc cụm ngắn | small | ✅ | ~600 token |
+| `translate` | Dịch một câu ngắn Việt ↔ Trung | small | ✅ | ~600 token |
 | `grammar` | Giải thích hoặc so sánh ngữ pháp, trợ từ, lượng từ, mẫu câu | large | ✅ | ~1.000 token |
 | `culture` | Lịch sử, văn hóa, điển tích thành ngữ, cổ văn | large | ✅ | ~1.000 token |
 | `correction` | Chữa câu hoặc đoạn văn user tự viết | large | ❌ (mang tính cá nhân) | ~1.200 token |
-| `off_topic` | Không liên quan tới học tiếng Trung | câu mẫu | — | — |
+| `study` | Cách học: lộ trình, phương pháp, luyện thi HSK, tài liệu, mẫu câu theo tình huống (hỏi đường, gọi món…) | small | ✅ | ~800 token |
+| `off_topic` | Không liên quan tới tiếng Trung hay việc học tiếng Trung. Vẫn trả lời ngắn, kèm 1–3 từ tiếng Trung liên quan | small | ❌ (hay cần dữ liệu thời gian thực) | ~400 token |
 | confidence < ngưỡng | Router không chắc chắn | large | ❌ | ~1.000 token |
 | Jev lỗi hoặc timeout | Chuyển sang router embedding (`bge-m3` + câu mẫu có nhãn) | theo kết quả router embedding | theo intent | theo intent |
 | Cả hai router lỗi | | large | ❌ | ~1.000 token |
@@ -70,7 +71,10 @@ QUESTIONS = {
             "grammar": "Explain or compare grammar points, particles, measure words or sentence patterns",
             "correction": "Check or correct a sentence or paragraph the learner wrote themselves",
             "culture": "Chinese history, culture, idiom origins or classical Chinese",
-            "off_topic": "Not related to learning Chinese at all",
+            "study": "How to study Chinese: learning roadmaps, study methods, HSK exam preparation, "
+                     "learning resources, or useful phrases for a situation or topic such as asking "
+                     "directions or ordering food",
+            "off_topic": "Not related to the Chinese language or to learning Chinese at all",
         },
     },
     "needs_context": {
@@ -86,6 +90,8 @@ ROUTES = {  # intent -> (tầng, có được cache câu trả lời không)
     "grammar": ("large", True),
     "culture": ("large", True),
     "correction": ("large", False),
+    "study": ("small", True),
+    "off_topic": ("small", False),  # vẫn trả lời, ngắn, kèm từ tiếng Trung liên quan
 }
 
 CONFIDENCE_THRESHOLD = 0.6  # giá trị tạm, chốt bằng eval (mục 6)
@@ -94,7 +100,7 @@ http = httpx.AsyncClient(headers={"Authorization": f"Bearer {os.environ['OPENROU
 
 @dataclass
 class Route:
-    tier: str        # "small" | "large" | "canned"
+    tier: str        # "small" | "large"
     cacheable: bool
     reason: str
 
@@ -112,9 +118,6 @@ async def route(question: str) -> Route:
     intent = answers["intent"]  # {"type": "choice", "choice": ..., "confidence": ..., "probabilities": {...}}
     if intent["confidence"] < CONFIDENCE_THRESHOLD:
         return Route("large", False, "low_confidence")
-    if intent["choice"] == "off_topic":
-        return Route("canned", False, "off_topic")
-
     tier, cacheable = ROUTES[intent["choice"]]
     cacheable = cacheable and answers["needs_context"]["noul"] < 0.5  # {"type": "noul", "noul": 0..1}
     return Route(tier, cacheable, intent["choice"])

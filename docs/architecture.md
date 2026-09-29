@@ -41,7 +41,7 @@ Giới hạn của CAG là kiến thức phải vừa context và càng dài cà
 |---|---|---|---|
 | API | `/chat` (stream), `/feedback` | FastAPI | |
 | Quota | Giới hạn lượt hỏi theo gói | Chưa làm (bản test) | Redis |
-| Router | Phân loại intent, kiểm tra phụ thuộc ngữ cảnh, lọc câu ngoài phạm vi | Jev qua OpenRouter; dự phòng `bge-m3` + so khớp câu mẫu có nhãn | Logistic regression trên dữ liệu thật |
+| Router | Phân loại intent, kiểm tra phụ thuộc ngữ cảnh, nhận ra câu ngoài tiếng Trung | Jev qua OpenRouter; dự phòng `bge-m3` + so khớp câu mẫu có nhãn | Logistic regression trên dữ liệu thật |
 | Prompt builder | Giữ phần đầu prompt cố định từng byte, quản lý `KNOWLEDGE_VERSION` | Module nội bộ | |
 | LLM gateway | Gọi model theo tầng, dự phòng, chuẩn hóa `usage` | OpenRouter | vLLM tự host (cùng API) |
 | Cache câu trả lời | Khớp tuyệt đối và gần giống | Redis + chỉ mục embedding trong bộ nhớ | Redis + pgvector (khi chạy nhiều worker) |

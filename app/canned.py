@@ -1,11 +1,4 @@
-"""Các câu trả lời mẫu, không tốn tiền gọi LLM."""
-
-OFF_TOPIC_ANSWER = (
-    "Mình là trợ lý học tiếng Trung nên chỉ hỗ trợ được các câu hỏi về tiếng Trung thôi: "
-    "tra từ, pinyin, dịch câu, giải thích ngữ pháp, chữa bài viết, văn hóa và thành ngữ.\n\n"
-    "Bạn thử hỏi mình kiểu như: \"了 và 过 khác nhau thế nào?\" hoặc "
-    "\"Dịch giúp mình câu: Cuối tuần này bạn có rảnh không?\" nhé!"
-)
+"""Các chỉ dẫn cố định gửi kèm cho model."""
 
 # Gửi ở cuối lịch sử để dùng lại cache phần đầu prompt và cache lịch sử.
 SUMMARY_INSTRUCTION = (

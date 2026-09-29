@@ -6,8 +6,8 @@
 `chat()` và `retry()` trả về luồng event dạng `{"event": ..., "data": {...}}`, API chuyển thành SSE:
 - `meta`: request_id, session_id, tầng, intent, nguồn câu trả lời
 - `delta`: một đoạn câu trả lời
-- `done`: usage, chi phí, độ trễ
-- `error`: lỗi, kèm `code`
+- `done`: usage, chi phí, độ trễ, `trace` (từng bước đã chạy, xem `app/trace.py`)
+- `error`: lỗi, kèm `code` và `trace`
 """
 
 import asyncio
@@ -22,7 +22,7 @@ from typing import Any
 import numpy as np
 
 from app.answer_cache import AnswerCache, CachedAnswer
-from app.canned import OFF_TOPIC_ANSWER, SUMMARY_INSTRUCTION
+from app.canned import SUMMARY_INSTRUCTION
 from app.config import Settings
 from app.embeddings import Embedder
 from app.llm.gateway import LLMGateway
@@ -32,6 +32,7 @@ from app.rag import NullRetriever, Retriever
 from app.router import ROUTES, IntentRouter, Route
 from app.sessions import Session, SessionStore
 from app.store import KVStore
+from app.trace import Trace, elapsed_ms
 from app.usage_log import RequestLog, UsageLog, hash_user
 
 log = logging.getLogger(__name__)
@@ -121,54 +122,87 @@ class ChatService:
             knowledge_version=self.prompt.version,
         )
 
+        trace = Trace(started)
+
+        t = time.monotonic()
         session = await self._load_session(inp)
         row.session_id = session.id
+        self._trace_session(trace, inp, session, elapsed_ms(t))
         # Có tóm tắt phiên trước thì câu hỏi có thể phụ thuộc ngữ cảnh, không coi là câu đầu phiên.
         is_first = session.is_first_turn and not session.summary
 
         # 1. Cache khớp tuyệt đối: chỉ cho câu hỏi đầu phiên, chạy trước router nên không tốn tiền Jev.
-        if is_first and (hit := await self.answer_cache.get_exact(question, level)):
-            async for ev in self._serve_cached(inp, session, question, level, hit, "exact", row, started):
-                yield ev
-            return
+        if not is_first:
+            trace.add("exact_cache", "skip", "Bỏ qua: không phải câu đầu phiên, câu hỏi có thể phụ thuộc ngữ cảnh")
+        else:
+            t = time.monotonic()
+            hit = await self.answer_cache.get_exact(question, level)
+            if hit:
+                trace.add("exact_cache", "hit", "Trúng: câu hỏi giống hệt đã được trả lời, không cần router và LLM",
+                          ms=elapsed_ms(t))
+                async for ev in self._serve_cached(inp, session, question, level, hit, "exact", row, started,
+                                                   trace):
+                    yield ev
+                return
+            trace.add("exact_cache", "miss", f"Chưa có câu hỏi giống hệt (trình độ {level or 'không có'})",
+                      ms=elapsed_ms(t))
 
         # 2. Router, chạy song song với embedding (dùng cho router dự phòng và cache gần giống).
+        t_emb = time.monotonic()
+        emb_ms: list[float] = []
         emb_task = self._start_embedding(question)
+        if emb_task:
+            emb_task.add_done_callback(lambda _: emb_ms.append(elapsed_ms(t_emb)))
+        t = time.monotonic()
         route = await self.router.route(question, emb_task)
+        self._trace_route(trace, route, elapsed_ms(t))
         row.intent, row.route_reason = route.intent, route.reason
         row.router_backend, row.router_confidence = route.backend, route.confidence
         row.needs_context = route.needs_context
 
-        if route.tier == "canned":
-            if emb_task:
-                emb_task.cancel()
-            row.tier, row.status = "canned", "canned"
-            row.latency_ms = _ms(started)
-            await self._save_record(request_id, inp, session, question, level, route, "canned", False, None)
-            yield _event("meta", request_id=request_id, session_id=session.id, tier="canned",
-                         intent=route.intent, reason=route.reason, answer_cache=None)
-            yield _event("delta", text=OFF_TOPIC_ANSWER)
-            yield _event("done", request_id=request_id, model=None, usage=None, cost_usd=0.0,
-                         latency_ms=row.latency_ms)
-            await self.usage_log.write(row)
-            return
-
         tier = route.tier
         cacheable = self._cacheable(route, is_first)
+        trace.add("cacheable", "ok" if cacheable else "skip", self._cache_note(route, is_first, cacheable))
         embedding = await emb_task if emb_task else None
+        if not emb_task:
+            trace.add("embedding", "skip", "Không cần: tắt cache gần giống và router không dùng embedding")
+        elif embedding is None:
+            trace.add("embedding", "fail", "Lỗi khi tính embedding, bỏ qua cache gần giống",
+                      ms=emb_ms[0] if emb_ms else None)
+        else:
+            trace.add("embedding", "ok", f"Tính embedding ({self.embedder.model}) song song với router",
+                      ms=emb_ms[0] if emb_ms else None)
 
         # 3. Cache gần giống: sau router, chỉ khi được phép cache.
-        if cacheable and embedding is not None and self.settings.semantic_cache_enabled:
+        threshold = self.settings.semantic_cache_threshold
+        if not cacheable:
+            trace.add("semantic_cache", "skip", "Bỏ qua: câu này không được cache")
+        elif not self.settings.semantic_cache_enabled:
+            trace.add("semantic_cache", "skip", "Tắt (SEMANTIC_CACHE_ENABLED=false)")
+        elif embedding is None:
+            trace.add("semantic_cache", "skip", "Bỏ qua: không có embedding")
+        else:
+            t = time.monotonic()
             if found := await self.answer_cache.get_similar(question, level, embedding):
                 hit, score = found
                 log.info("Trúng cache gần giống (%.3f): %r ~ %r", score, question, hit.question)
+                trace.add("semantic_cache", "hit", f"Trúng câu gần giống (cosine {score:.3f} ≥ {threshold}): "
+                          f"“{hit.question}”", ms=elapsed_ms(t), score=round(score, 4))
                 async for ev in self._serve_cached(inp, session, question, level, hit, "semantic", row,
-                                                   started, route=route):
+                                                   started, trace, route=route):
                     yield ev
                 return
+            trace.add("semantic_cache", "miss", f"Không có câu nào cùng chữ Hán với cosine ≥ {threshold}",
+                      ms=elapsed_ms(t))
 
         # 4. RAG, 5. ghép prompt, 6. gọi LLM.
+        t = time.monotonic()
         references = await self.retriever.retrieve(question, intent=route.intent, level=level)
+        if isinstance(self.retriever, NullRetriever):
+            trace.add("rag", "skip", "Chưa bật RAG, chỉ dùng kiến thức cố định trong system prompt")
+        else:
+            trace.add("rag", "ok" if references else "miss", f"Lấy được {len(references)} đoạn tham khảo",
+                      ms=elapsed_ms(t))
         user_turn = self.prompt.compose_user_turn(
             question, level=level, intent=route.intent, references=references, summary=session.summary
         )
@@ -176,7 +210,7 @@ class ChatService:
         async for ev in self._generate(
             request_id=request_id, inp=inp, session=session, question=question, level=level, route=route,
             tier=tier, cacheable=cacheable, embedding=embedding, history=history, user_turn=user_turn,
-            turn_index=len(history), row=row, started=started,
+            turn_index=len(history), row=row, started=started, trace=trace,
         ):
             yield ev
 
@@ -213,11 +247,16 @@ class ChatService:
         )
         route = Route("large", record.cacheable, "feedback_retry", intent=record.intent)
         inp = ChatInput(user_id=user_id, message=record.question, session_id=session.id, level=record.level)
+        trace = Trace(started)
+        trace.add("feedback_retry", "ok", f"User chưa hài lòng với request {request_id[:8]}: hỏi lại bằng tầng "
+                  "large, không qua router và cache", original_request_id=request_id)
+        trace.add("session", "ok", "Dùng lại đúng lượt user cũ trong lịch sử, thay câu trả lời cũ bằng câu mới"
+                  if idx is not None else "Không tìm thấy lượt cũ trong phiên: hỏi lại không kèm lịch sử")
         async for ev in self._generate(
             request_id=new_id, inp=inp, session=session, question=record.question, level=record.level,
             route=route, tier="large", cacheable=record.cacheable, embedding=None, history=history,
-            user_turn=user_turn, turn_index=idx, row=row, started=started, replace_turn=idx is not None,
-            is_retry=True,
+            user_turn=user_turn, turn_index=idx, row=row, started=started, trace=trace,
+            replace_turn=idx is not None, is_retry=True,
         ):
             yield ev
 
@@ -227,7 +266,7 @@ class ChatService:
         self, *, request_id: str, inp: ChatInput, session: Session, question: str, level: str | None,
         route: Route, tier: str, cacheable: bool, embedding: np.ndarray | None,
         history: list[dict[str, str]], user_turn: str, turn_index: int | None, row: RequestLog,
-        started: float, replace_turn: bool = False, is_retry: bool = False,
+        started: float, trace: Trace, replace_turn: bool = False, is_retry: bool = False,
     ) -> AsyncIterator[Event]:
         row.tier = tier
         reasoning = tier == "large" and route.intent in self.settings.reasoning_intents
@@ -237,13 +276,21 @@ class ChatService:
             reasoning=reasoning,
             reasoning_max_tokens=self.settings.reasoning_max_tokens,
         )
+        k = self.prompt.knowledge
+        trace.add("prompt", "ok",
+                  f"[system: kiến thức {k.version}, ~{k.estimated_tokens:,} token, cố định nên cache được] "
+                  f"+ [lịch sử {len(history)} message] + [lượt user {len(user_turn)} ký tự]; "
+                  f"max_tokens {req.max_tokens}" + (", bật thinking" if reasoning else ""),
+                  messages=len(req.messages), max_tokens=req.max_tokens, reasoning=reasoning)
         yield _event("meta", request_id=request_id, session_id=session.id, tier=tier, intent=route.intent,
                      reason=route.reason, answer_cache=None)
 
         parts: list[str] = []
         ttft: float | None = None
+        attempts: list[dict[str, Any]] = []
+        llm_started = time.monotonic()
         try:
-            async for ev in self.gateway.stream(tier, req, sticky_key=self.sticky_key):
+            async for ev in self.gateway.stream(tier, req, sticky_key=self.sticky_key, attempts=attempts):
                 if ev.type == "delta":
                     if ttft is None:
                         ttft = _ms(started)
@@ -260,24 +307,48 @@ class ChatService:
                 answer = "".join(parts)
                 truncated = ev.finish_reason == "length"
 
+                self._trace_llm_failures(trace, attempts, llm_started)
+                cost = f"${usage.cost_usd:.5f}" if usage.cost_usd is not None else "chưa rõ chi phí"
+                trace.add("llm", "fallback" if attempts else "ok",
+                          f"{ev.model} qua {ev.provider or '?'}: TTFT {ttft or 0:.0f} ms, "
+                          f"đọc cache {usage.cached_input_tokens:,}/{usage.total_input_tokens:,} token input "
+                          f"({usage.cache_read_ratio:.0%}), {usage.output_tokens:,} token output, {cost}"
+                          + (", bị cắt do max_tokens" if truncated else ""),
+                          ms=elapsed_ms(llm_started), model=ev.model, provider=ev.provider,
+                          finish_reason=ev.finish_reason)
+
                 await self._append_turn(session, user_turn, answer, turn_index, replace_turn)
                 await self._save_record(request_id, inp, session, question, level, route, tier, cacheable,
                                         turn_index, is_retry=is_retry)
+                trace.add("save", "ok", f"Lưu lịch sử phiên ({session.turns} lượt) và bản ghi request để xử lý "
+                          "feedback" if turn_index is not None else "Lưu bản ghi request, không lưu lịch sử phiên")
                 if cacheable and answer and not truncated:
+                    with_vec = embedding is not None and self.settings.semantic_cache_enabled
                     await self.answer_cache.put(
                         question, level,
                         CachedAnswer(text=answer, tier=tier, intent=route.intent, model=ev.model,
                                      created_at=time.time()),
                         embedding if self.settings.semantic_cache_enabled else None,
                     )
+                    trace.add("answer_cache", "ok", "Lưu cache câu trả lời"
+                              + (" và thêm embedding vào chỉ mục gần giống" if with_vec else ""))
+                elif truncated:
+                    trace.add("answer_cache", "skip", "Không lưu cache: câu trả lời bị cắt do max_tokens")
+                else:
+                    trace.add("answer_cache", "skip", "Không lưu cache: câu này không được cache")
+                await self._save_trace(request_id, trace)
                 yield _event("done", request_id=request_id, model=ev.model, provider=ev.provider,
                              usage=_usage_dict(usage), cost_usd=usage.cost_usd, ttft_ms=ttft,
-                             latency_ms=row.latency_ms, truncated=truncated)
+                             latency_ms=row.latency_ms, truncated=truncated, trace=trace.steps)
         except LLMError as e:
             log.error("Request %s lỗi: %s", request_id, e)
             row.status, row.error, row.latency_ms = "error", str(e)[:500], _ms(started)
+            self._trace_llm_failures(trace, attempts, llm_started)
+            trace.add("llm", "fail", "Đã stream một phần thì lỗi, không chuyển model" if parts
+                      else f"Mọi model của tầng {tier} đều lỗi, trả lỗi cho user")
+            await self._save_trace(request_id, trace)
             yield _event("error", request_id=request_id, code="llm_unavailable",
-                         message="Hệ thống đang bận, bạn thử lại sau ít phút nhé.")
+                         message="Hệ thống đang bận, bạn thử lại sau ít phút nhé.", trace=trace.steps)
         except (asyncio.CancelledError, GeneratorExit):
             # User ngắt kết nối giữa chừng. Token đã sinh vẫn bị tính tiền nhưng không có usage.
             row.status, row.ttft_ms, row.latency_ms = "aborted", ttft, _ms(started)
@@ -288,7 +359,7 @@ class ChatService:
 
     async def _serve_cached(
         self, inp: ChatInput, session: Session, question: str, level: str | None, hit: CachedAnswer,
-        source: str, row: RequestLog, started: float, route: Route | None = None,
+        source: str, row: RequestLog, started: float, trace: Trace, route: Route | None = None,
     ) -> AsyncIterator[Event]:
         row.answer_cache, row.tier, row.model = source, hit.tier, hit.model
         row.intent = hit.intent
@@ -300,11 +371,16 @@ class ChatService:
         turn_index = len(session.messages)
         await self._append_turn(session, user_turn, hit.text, turn_index, replace=False)
         await self._save_record(row.request_id, inp, session, question, level, route, hit.tier, True, turn_index)
+        age = time.time() - hit.created_at
+        trace.add("answer", "hit", f"Trả câu trả lời đã cache (tầng {hit.tier}, model {hit.model}, tạo "
+                  f"{age / 60:.0f} phút trước), không gọi LLM, $0")
+        trace.add("save", "ok", f"Lưu lịch sử phiên ({session.turns} lượt) và bản ghi request")
+        await self._save_trace(row.request_id, trace)
         yield _event("meta", request_id=row.request_id, session_id=session.id, tier=hit.tier,
                      intent=hit.intent, reason=route.reason, answer_cache=source)
         yield _event("delta", text=hit.text)
         yield _event("done", request_id=row.request_id, model=hit.model, usage=None, cost_usd=0.0,
-                     latency_ms=row.latency_ms)
+                     latency_ms=row.latency_ms, trace=trace.steps)
         await self.usage_log.write(row)
 
     def _start_embedding(self, question: str) -> asyncio.Task | None:
@@ -313,6 +389,69 @@ class ChatService:
         if not (self.settings.semantic_cache_enabled or self.router.uses_embeddings):
             return None
         return asyncio.create_task(self.embedder.embed(question))
+
+    def _trace_session(self, trace: Trace, inp: ChatInput, session: Session, ms: float) -> None:
+        if not inp.session_id:
+            trace.add("session", "ok", "Không có session_id: mở phiên mới", ms=ms)
+        elif session.id == inp.session_id:
+            trace.add("session", "ok", f"Tiếp phiên cũ, đã có {session.turns} lượt", ms=ms)
+        elif session.previous_id == inp.session_id:
+            note = "đã tóm tắt phiên cũ bằng tầng small" if session.summary else "tóm tắt lỗi, bỏ qua tóm tắt"
+            trace.add("session", "fallback",
+                      f"Phiên cũ đủ {self.settings.max_turns_per_session} lượt: {note}, mở phiên mới", ms=ms)
+        else:
+            trace.add("session", "miss", "session_id không tồn tại hoặc đã hết hạn: mở phiên mới", ms=ms)
+
+    @staticmethod
+    def _trace_route(trace: Trace, route: Route, ms: float) -> None:
+        if not route.attempts:
+            trace.add("router", "skip", "Không cấu hình router nào", ms=ms)
+        for i, a in enumerate(route.attempts):
+            if a["ok"]:
+                trace.add("router", "ok", f"{a['backend']}: intent {a['intent']}, độ tin cậy {a['confidence']:.2f} "
+                          f"(ngưỡng {a['threshold']}), needs_context {a['needs_context']:.2f}", ms=a["ms"],
+                          **{k: a[k] for k in ("backend", "intent", "confidence", "needs_context")})
+            else:
+                then = "chuyển router dự phòng" if i + 1 < len(route.attempts) else "hết router để thử"
+                trace.add("router", "fail", f"{a['backend']} lỗi: {a['error'] or 'không rõ'} → {then}", ms=a["ms"],
+                          backend=a["backend"])
+        conf = f"{route.confidence:.2f}" if route.confidence is not None else "?"
+        detail, status = {
+            "off_topic": ("Câu hỏi ngoài tiếng Trung → tầng small, trả lời ngắn kèm vài từ tiếng Trung liên quan",
+                          "ok"),
+            "low_confidence": (f"Độ tin cậy {conf} dưới ngưỡng → tầng large, bỏ intent (an toàn hơn đẩy nhầm "
+                               "câu khó xuống small)", "fallback"),
+            "router_unavailable": ("Mọi router đều lỗi → tầng large", "fallback"),
+            "unknown_intent": ("Router trả intent lạ → tầng large", "fallback"),
+        }.get(route.reason, (f"intent {route.intent} → tầng {route.tier} theo bảng định tuyến", "ok"))
+        trace.add("route", status, detail, tier=route.tier, reason=route.reason)
+
+    def _cache_note(self, route: Route, is_first: bool, cacheable: bool) -> str:
+        if route.reason != route.intent or route.intent not in ROUTES:
+            return f"Không cache: route là {route.reason}, không có intent chắc chắn"
+        if not ROUTES[route.intent][1]:
+            why = {"correction": "câu trả lời riêng cho bài viết của từng user",
+                   "off_topic": "câu ngoài chủ đề hay cần dữ liệu thời gian thực"}.get(route.intent, "")
+            return f"Không cache: intent {route.intent}" + (f", {why}" if why else "")
+        if is_first:
+            return "Được cache: câu đầu phiên, không phụ thuộc ngữ cảnh"
+        nc = f"{route.needs_context:.2f}" if route.needs_context is not None else "?"
+        if cacheable:
+            return f"Được cache: needs_context {nc} dưới ngưỡng {self.settings.needs_context_threshold}"
+        return f"Không cache: câu hỏi phụ thuộc lượt trước (needs_context {nc})"
+
+    @staticmethod
+    def _trace_llm_failures(trace: Trace, attempts: list[dict[str, Any]], llm_started: float) -> None:
+        start = elapsed_ms(trace.started) - elapsed_ms(llm_started)
+        for a in attempts:
+            start += a["ms"]
+            then = "thử model dự phòng" if a["retryable"] and not a["after_first_token"] else "dừng"
+            code = f" ({a['status']})" if a["status"] else ""
+            trace.add("llm", "fail", f"{a['model']} lỗi{code}: {a['error']} → {then}", ms=a["ms"],
+                      at_ms=round(start, 1), model=a["model"])
+
+    async def _save_trace(self, request_id: str, trace: Trace) -> None:
+        await self.store.set(f"trace:{request_id}", json.dumps(trace.steps, ensure_ascii=False), RECORD_TTL)
 
     def _cacheable(self, route: Route, is_first: bool) -> bool:
         intent_ok = route.reason == route.intent and route.intent in ROUTES and ROUTES[route.intent][1]

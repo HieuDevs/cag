@@ -5,8 +5,9 @@ vì ghép hai câu trả lời từ hai model khác nhau sẽ ra nội dung lộ
 """
 
 import logging
+import time
 from collections.abc import AsyncIterator
-from typing import Protocol
+from typing import Any, Protocol
 
 from app.config import ModelTarget, Settings
 from app.llm.types import ChatRequest, LLMError, LLMResult, StreamEvent, Usage
@@ -35,12 +36,15 @@ class LLMGateway:
             raise ValueError(f"Tầng không hợp lệ: {tier}") from None
 
     async def stream(
-        self, tier: str, req: ChatRequest, *, sticky_key: str | None = None
+        self, tier: str, req: ChatRequest, *, sticky_key: str | None = None,
+        attempts: list[dict[str, Any]] | None = None,
     ) -> AsyncIterator[StreamEvent]:
+        """`attempts`: nếu truyền vào, ghi thêm từng model đã thử (model, thời gian, lỗi) để hiển thị trace."""
         failed: list[str] = []
         last_error: LLMError | None = None
         for target in self.targets(tier):
             started = False
+            t0 = time.monotonic()
             try:
                 async for event in self.backend.stream_chat(target, req, sticky_key=sticky_key):
                     if event.type == "delta":
@@ -50,6 +54,10 @@ class LLMGateway:
                     yield event
                 return
             except LLMError as e:
+                if attempts is not None:
+                    attempts.append({"model": target.model, "ms": round((time.monotonic() - t0) * 1000, 1),
+                                     "status": e.status, "error": str(e)[:300], "retryable": e.retryable,
+                                     "after_first_token": started})
                 if started or not e.retryable:
                     raise
                 log.warning("Model %s lỗi, chuyển sang model dự phòng: %s", target.model, e)

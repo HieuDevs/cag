@@ -1,0 +1,695 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CAG Test Console</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #667085; --border: #e3e6eb;
+  --accent: #2f6fed; --accent-soft: #e8efff; --ok: #1a8f5a; --ok-soft: #e3f5ec;
+  --warn: #b7791f; --warn-soft: #fdf3e1; --err: #c53030; --err-soft: #fde8e8;
+  --code: #f1f3f6; --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12151b; --panel: #1a1e26; --text: #e4e7ec; --muted: #98a2b3; --border: #2c323d;
+    --accent: #6d9bff; --accent-soft: #1f2a44; --ok: #4cc38a; --ok-soft: #173327;
+    --warn: #e0a84a; --warn-soft: #3a2d15; --err: #f07878; --err-soft: #3d1c1c; --code: #232833;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12151b; --panel: #1a1e26; --text: #e4e7ec; --muted: #98a2b3; --border: #2c323d;
+  --accent: #6d9bff; --accent-soft: #1f2a44; --ok: #4cc38a; --ok-soft: #173327;
+  --warn: #e0a84a; --warn-soft: #3a2d15; --err: #f07878; --err-soft: #3d1c1c; --code: #232833;
+}
+* { box-sizing: border-box; }
+/* Trang cao đúng bằng màn hình; khung chat và khung bên phải tự scroll bên trong. */
+html, body { height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--text); display: flex; flex-direction: column;
+  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", sans-serif; }
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 12px 16px;
+  background: var(--panel); border-bottom: 1px solid var(--border); flex-shrink: 0; }
+header h1 { font-size: 16px; margin: 0; }
+.health { display: flex; flex-wrap: wrap; gap: 6px; font-size: 12px; color: var(--muted); }
+main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px; padding: 16px; }
+.panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px;
+  min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 12px; }
+.panel > * { flex-shrink: 0; }
+.panel h2 { font-size: 14px; margin: 0; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.spacer { flex: 1; }
+button, select, input, textarea { font: inherit; color: var(--text); }
+button { background: var(--panel); border: 1px solid var(--border); border-radius: 7px; padding: 5px 11px;
+  cursor: pointer; }
+button:hover { border-color: var(--accent); }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.danger { color: var(--err); }
+button.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+button:disabled { opacity: .5; cursor: default; }
+select, input[type=number], input[type=text] { background: var(--panel); border: 1px solid var(--border);
+  border-radius: 7px; padding: 4px 8px; }
+textarea { width: 100%; min-height: 72px; resize: vertical; background: var(--panel);
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+textarea:focus, input:focus, select:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+label { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 13px; }
+.chip { font-size: 12px; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--border);
+  background: var(--panel); cursor: pointer; }
+.chip:hover { border-color: var(--accent); color: var(--accent); }
+.pill { display: inline-block; font-size: 11px; padding: 1px 8px; border-radius: 999px;
+  background: var(--code); color: var(--muted); font-family: var(--mono); white-space: nowrap; }
+.pill.ok { background: var(--ok-soft); color: var(--ok); }
+.pill.warn { background: var(--warn-soft); color: var(--warn); }
+.pill.err { background: var(--err-soft); color: var(--err); }
+.pill.accent { background: var(--accent-soft); color: var(--accent); }
+.muted { color: var(--muted); font-size: 12px; }
+.mono { font-family: var(--mono); font-size: 12px; }
+#chatlog { flex: 1 1 0; min-height: 160px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px;
+  padding-right: 4px; overscroll-behavior: contain; }
+.turn { border: 1px solid var(--border); border-radius: 9px; overflow: hidden; }
+.turn .q { background: var(--code); padding: 8px 12px; white-space: pre-wrap; }
+.turn .q b { color: var(--muted); font-weight: 500; font-size: 12px; margin-right: 6px; }
+.turn .meta, .turn .done, .turn .fb { padding: 6px 12px; display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+.turn .done { border-top: 1px dashed var(--border); }
+.turn .a { padding: 4px 12px 8px; overflow-wrap: anywhere; }
+.turn .a:empty::before { content: "…"; color: var(--muted); }
+.turn .a table { border-collapse: collapse; }
+.turn .a th, .turn .a td { border: 1px solid var(--border); padding: 3px 7px; }
+.turn .a pre, .turn .a code { background: var(--code); border-radius: 5px; font-family: var(--mono); }
+.turn .a pre { padding: 8px; overflow-x: auto; }
+.turn .err { padding: 8px 12px; color: var(--err); background: var(--err-soft); }
+.turn .fb { border-top: 1px solid var(--border); }
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; }
+.tile { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+.tile .v { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.tile .l { font-size: 11px; color: var(--muted); }
+.tablewrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 8px; }
+table.data { border-collapse: collapse; width: 100%; font-size: 12px; font-variant-numeric: tabular-nums; }
+table.data th, table.data td { padding: 5px 8px; border-bottom: 1px solid var(--border); text-align: left;
+  white-space: nowrap; }
+table.data th { background: var(--code); font-weight: 600; position: sticky; top: 0; }
+table.data td.num, table.data th.num { text-align: right; }
+table.data tbody tr { cursor: pointer; }
+table.data tbody tr:hover { background: var(--accent-soft); }
+pre.json { background: var(--code); border-radius: 8px; padding: 10px; margin: 0; font: 12px/1.45 var(--mono);
+  overflow: auto; max-height: 420px; white-space: pre-wrap; overflow-wrap: anywhere; }
+details.item { border: 1px solid var(--border); border-radius: 8px; }
+details.item summary { padding: 6px 10px; cursor: pointer; display: flex; flex-wrap: wrap; gap: 6px;
+  align-items: center; }
+details.item[open] summary { border-bottom: 1px solid var(--border); }
+details.item > .body { padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; }
+.msg { border-left: 3px solid var(--border); padding: 2px 8px; white-space: pre-wrap; font-size: 12px; }
+.msg.user { border-color: var(--accent); }
+.msg.assistant { border-color: var(--ok); }
+.msg .role { font-size: 11px; color: var(--muted); font-family: var(--mono); display: block; }
+#view { flex: 1 1 0; min-height: 160px; min-width: 0; overflow-y: auto; display: flex; flex-direction: column;
+  gap: 10px; padding-right: 4px; overscroll-behavior: contain; }
+/* Flex item có overflow khác visible sẽ bị co về 0 thay vì tràn ra; giữ nguyên chiều cao để khung scroll. */
+#chatlog > *, #view > * { flex-shrink: 0; }
+/* Màn hẹp: xếp một cột, trang scroll bình thường, mỗi khung giới hạn chiều cao riêng. */
+@media (max-width: 960px) {
+  html, body { height: auto; }
+  main { grid-template-columns: minmax(0, 1fr); }
+  #chatlog { flex: none; max-height: 65vh; }
+  #view { flex: none; max-height: 75vh; }
+}
+.empty { color: var(--muted); text-align: center; padding: 24px; }
+details.trace { border-top: 1px solid var(--border); }
+details.trace > summary { padding: 6px 12px; cursor: pointer; font-size: 12px; color: var(--muted); }
+details.trace > summary b { color: var(--text); font-weight: 600; }
+ol.steps { list-style: none; margin: 0; padding: 0 12px 10px; display: flex; flex-direction: column; gap: 2px; }
+ol.steps li { display: grid; grid-template-columns: 22px 20px minmax(0, 1fr) auto; gap: 6px; align-items: start;
+  padding: 4px 0; border-bottom: 1px dashed var(--border); font-size: 12px; }
+ol.steps li:last-child { border-bottom: none; }
+ol.steps .n { color: var(--muted); font-family: var(--mono); text-align: right; }
+ol.steps .ic { width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; font-size: 11px;
+  background: var(--code); color: var(--muted); }
+ol.steps .ic.ok { background: var(--ok-soft); color: var(--ok); }
+ol.steps .ic.warn { background: var(--warn-soft); color: var(--warn); }
+ol.steps .ic.err { background: var(--err-soft); color: var(--err); }
+ol.steps .ic.accent { background: var(--accent-soft); color: var(--accent); }
+ol.steps .name { font-weight: 600; margin-right: 6px; }
+ol.steps li.skip .body { color: var(--muted); }
+ol.steps .t { font-family: var(--mono); color: var(--muted); text-align: right; white-space: nowrap; }
+ol.steps .bar { grid-column: 3 / 5; height: 3px; background: var(--code); border-radius: 2px; position: relative; }
+ol.steps .bar i { position: absolute; top: 0; bottom: 0; border-radius: 2px; background: var(--accent); min-width: 2px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>CAG Test Console</h1>
+  <div class="health" id="health"><span class="pill">đang kiểm tra…</span></div>
+  <div class="spacer"></div>
+  <button id="themeBtn" title="Đổi giao diện sáng/tối">◐</button>
+</header>
+
+<main>
+  <section class="panel">
+    <div class="row">
+      <h2>Chat</h2>
+      <div class="spacer"></div>
+      <span class="muted">Phiên:</span>
+      <span class="pill" id="sessionPill">mới</span>
+      <button id="newSessionBtn">Phiên mới</button>
+      <button id="clearLogBtn" title="Chỉ xóa khung hiển thị, không xóa dữ liệu server">Xóa khung chat</button>
+    </div>
+    <div id="chatlog"><div class="empty">Chưa có câu hỏi. Chọn một câu mẫu bên dưới hoặc tự gõ.</div></div>
+    <div class="row" id="samples"></div>
+    <textarea id="msg" placeholder="Nhập câu hỏi… (Ctrl/⌘ + Enter để gửi)"></textarea>
+    <div class="row">
+      <label>Trình độ
+        <select id="level">
+          <option value="">(không)</option>
+          <option>HSK1</option><option>HSK2</option><option selected>HSK3</option><option>HSK4</option>
+          <option>HSK5</option><option>HSK6</option><option>HSK7-9</option>
+        </select>
+      </label>
+      <label><input type="checkbox" id="stream" checked> Stream</label>
+      <div class="spacer"></div>
+      <button class="primary" id="sendBtn">Gửi</button>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="row" id="tabs">
+      <button data-tab="stats" class="active">Thống kê</button>
+      <button data-tab="requests">Request log</button>
+      <button data-tab="memory">Bộ nhớ</button>
+      <button data-tab="knowledge">Kiến thức CAG</button>
+      <button data-tab="health">Health</button>
+      <button data-tab="warmup">Warmup</button>
+      <div class="spacer"></div>
+      <label><input type="checkbox" id="autoRefresh"> Tự làm mới 5s</label>
+      <button id="refreshBtn" title="Làm mới">↻</button>
+    </div>
+    <div class="row" id="toolbar"></div>
+    <div id="view"></div>
+  </section>
+</main>
+
+<script>
+const $ = (sel, el = document) => el.querySelector(sel);
+const h = (tag, attrs = {}, ...children) => {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (v == null || v === false) continue;
+    if (k === "class") el.className = v;
+    else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    else el.setAttribute(k, v === true ? "" : v);
+  }
+  for (const c of children.flat()) if (c != null && c !== false) el.append(c.nodeType ? c : String(c));
+  return el;
+};
+const pill = (text, kind = "") => h("span", { class: `pill ${kind}` }, text);
+const fmt = {
+  usd: v => v == null ? "–" : "$" + Number(v).toFixed(v < 0.01 ? 5 : 4),
+  pct: v => v == null ? "–" : (v * 100).toFixed(1) + "%",
+  ms: v => v == null ? "–" : Math.round(v) + " ms",
+  int: v => v == null ? "–" : Number(v).toLocaleString("vi-VN"),
+  num: v => v == null ? "–" : Number(v).toFixed(2),
+  ttl: s => s == null ? "không hết hạn" : s > 86400 ? (s / 86400).toFixed(1) + " ngày"
+    : s > 3600 ? (s / 3600).toFixed(1) + " giờ" : s > 60 ? Math.round(s / 60) + " phút" : Math.round(s) + " s",
+  bytes: b => b > 1024 ? (b / 1024).toFixed(1) + " KB" : b + " B",
+};
+const statusKind = s => ({ ok: "ok", canned: "accent", error: "err", aborted: "warn" }[s] || "");
+const tierKind = t => ({ small: "ok", large: "warn", canned: "accent" }[t] || "");
+
+function renderMarkdown(text) {
+  if (window.marked && window.DOMPurify) return DOMPurify.sanitize(marked.parse(text));
+  const d = document.createElement("div"); d.textContent = text;
+  return `<div style="white-space:pre-wrap">${d.innerHTML}</div>`;
+}
+
+async function api(path, opts = {}) {
+  const r = await fetch(path, { headers: { "content-type": "application/json" }, ...opts });
+  const ct = r.headers.get("content-type") || "";
+  const body = ct.includes("json") ? await r.json() : await r.text();
+  if (!r.ok) throw new Error(body?.error?.message || body?.detail?.[0]?.msg || JSON.stringify(body) || r.status);
+  return body;
+}
+
+// ---------------------------------------------------------------- theme
+(() => {
+  let theme = null;
+  try { theme = localStorage.getItem("cag-theme"); } catch {}
+  if (theme) document.documentElement.dataset.theme = theme;
+  $("#themeBtn").onclick = () => {
+    const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+    const cur = document.documentElement.dataset.theme || (dark ? "dark" : "light");
+    const next = cur === "dark" ? "light" : "dark";
+    document.documentElement.dataset.theme = next;
+    try { localStorage.setItem("cag-theme", next); } catch {}
+  };
+})();
+
+// ---------------------------------------------------------------- health
+async function loadHealth() {
+  const el = $("#health");
+  try {
+    const hl = await api("/health");
+    el.replaceChildren(
+      pill(hl.ok ? "store OK" : "store lỗi", hl.ok ? "ok" : "err"),
+      pill(`kiến thức ${hl.knowledge.version}`),
+      pill(`~${fmt.int(hl.knowledge.estimated_tokens)} token`),
+      pill(`router: ${hl.router.join(" → ") || "không có"}`),
+      ...Object.entries(hl.tiers).map(([t, ms]) => pill(`${t}: ${ms[0]}`, tierKind(t))),
+    );
+    return hl;
+  } catch (e) {
+    el.replaceChildren(pill("server không phản hồi: " + e.message, "err"));
+  }
+}
+
+// ---------------------------------------------------------------- chat
+const SAMPLES = [
+  "你好 nghĩa là gì?",
+  "了 và 过 khác nhau thế nào?",
+  "Dịch sang tiếng Trung: Hôm qua tôi đi thư viện đọc sách.",
+  "Chữa giúp câu: 我昨天去了图书馆看书了。",
+  "Thành ngữ 画蛇添足 có nguồn gốc thế nào?",
+  "Lượng từ cho 书 là gì?",
+  "Cho thêm ví dụ",
+  "Hôm nay thời tiết Hà Nội thế nào?",
+];
+let sessionId = null;
+let busy = false;
+
+function setSession(id) {
+  sessionId = id;
+  $("#sessionPill").textContent = id ? id.slice(0, 8) : "mới";
+  $("#sessionPill").title = id || "";
+}
+
+$("#samples").append(...SAMPLES.map(s => h("span", { class: "chip", onclick: () => { $("#msg").value = s; $("#msg").focus(); } }, s)));
+$("#newSessionBtn").onclick = () => setSession(null);
+$("#clearLogBtn").onclick = () => $("#chatlog").replaceChildren(h("div", { class: "empty" }, "Khung chat trống."));
+$("#sendBtn").onclick = send;
+$("#msg").addEventListener("keydown", e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) send(); });
+
+const chatlog = $("#chatlog");
+const nearBottom = () => chatlog.scrollHeight - chatlog.scrollTop - chatlog.clientHeight < 80;
+const scrollToBottom = () => { chatlog.scrollTop = chatlog.scrollHeight; };
+
+function newTurn(label, question) {
+  const log = $("#chatlog");
+  $(".empty", log)?.remove();
+  const turn = h("div", { class: "turn" },
+    h("div", { class: "q" }, h("b", {}, label), question),
+    h("div", { class: "meta" }),
+    h("div", { class: "a" }),
+  );
+  log.append(turn);
+  scrollToBottom();
+  return turn;
+}
+
+function renderMeta(turn, m) {
+  // replaceChildren biến null thành chữ "null", nên lọc trước.
+  $(".meta", turn).replaceChildren(...[
+    pill(m.tier, tierKind(m.tier)),
+    m.intent ? pill("intent: " + m.intent, "accent") : null,
+    m.reason && m.reason !== m.intent ? pill("lý do: " + m.reason, "warn") : null,
+    m.answer_cache ? pill("cache câu trả lời: " + m.answer_cache, "ok") : null,
+    h("span", { class: "muted mono", title: m.request_id }, "req " + (m.request_id || "").slice(0, 8)),
+  ].filter(Boolean));
+}
+
+function renderDone(turn, d) {
+  const u = d.usage;
+  const ratio = u ? u.cache_read_ratio : null;
+  turn.append(h("div", { class: "done" },
+    d.model ? pill(d.model) : null,
+    d.provider ? pill(d.provider) : null,
+    pill(fmt.usd(d.cost_usd), d.cost_usd ? "" : "ok"),
+    d.ttft_ms != null ? pill("TTFT " + fmt.ms(d.ttft_ms)) : null,
+    pill("tổng " + fmt.ms(d.latency_ms)),
+    u ? pill(`input ${fmt.int(u.input_tokens)} + cache ${fmt.int(u.cached_input_tokens)} (${fmt.pct(ratio)})`,
+      ratio > 0.5 ? "ok" : ratio > 0 ? "warn" : "") : null,
+    u ? pill(`output ${fmt.int(u.output_tokens)}` + (u.reasoning_tokens ? ` (thinking ${fmt.int(u.reasoning_tokens)})` : "")) : null,
+    d.truncated ? pill("bị cắt (max_tokens)", "err") : null,
+  ));
+}
+
+const STEP_LABELS = {
+  session: "Phiên", exact_cache: "Cache khớp tuyệt đối", router: "Router", route: "Định tuyến",
+  cacheable: "Được cache?", embedding: "Embedding", semantic_cache: "Cache gần giống", rag: "RAG",
+  prompt: "Ghép prompt", llm: "Gọi LLM", save: "Lưu", answer_cache: "Lưu cache câu trả lời",
+  answer: "Trả lời", feedback_retry: "Hỏi lại",
+};
+const STATUS_ICON = {
+  ok: ["✓", "ok"], hit: ["⚡", "accent"], miss: ["○", ""], skip: ["–", ""], fail: ["✗", "err"], fallback: ["↪", "warn"],
+};
+
+function traceList(steps) {
+  const total = Math.max(1, ...steps.map(s => s.at_ms || 0));
+  return h("ol", { class: "steps" }, ...steps.map((s, i) => {
+    const [icon, kind] = STATUS_ICON[s.status] || ["?", ""];
+    const end = s.at_ms || 0, dur = s.ms || 0;
+    const timing = (dur ? fmt.ms(dur) + " · " : "") + "+" + fmt.ms(end);
+    return h("li", { class: s.status, title: s.data ? JSON.stringify(s.data, null, 2) : "" },
+      h("span", { class: "n" }, i + 1),
+      h("span", { class: `ic ${kind}` }, icon),
+      h("span", { class: "body" }, h("span", { class: "name" }, STEP_LABELS[s.step] || s.step), s.detail),
+      h("span", { class: "t" }, timing),
+      dur ? h("span", { class: "bar" }, h("i", { style: `left:${(Math.max(0, end - dur) / total) * 100}%;width:${(dur / total) * 100}%` })) : null,
+    );
+  }));
+}
+
+function traceSummary(steps) {
+  const pick = st => steps.filter(s => s.status === st).length;
+  const parts = [`${steps.length} bước`];
+  if (pick("hit")) parts.push(`${pick("hit")} trúng cache`);
+  if (pick("fallback")) parts.push(`${pick("fallback")} dự phòng`);
+  if (pick("fail")) parts.push(`${pick("fail")} lỗi`);
+  return parts.join(" · ");
+}
+
+function renderTrace(parent, steps, open = true) {
+  if (!steps?.length) return;
+  parent.append(h("details", { class: "trace", open },
+    h("summary", {}, h("b", {}, "Luồng xử lý"), " · " + traceSummary(steps)),
+    traceList(steps)));
+}
+
+function renderFeedback(turn, requestId) {
+  const box = h("div", { class: "fb" }, h("span", { class: "muted" }, "Feedback:"));
+  const act = (rating, retry) => async () => {
+    box.querySelectorAll("button").forEach(b => b.disabled = true);
+    if (retry) return runStream("Hỏi lại (large)", `request ${requestId.slice(0, 8)}`, "/feedback",
+      { request_id: requestId, rating: "unsatisfied", retry: true, stream: $("#stream").checked }, box);
+    try {
+      await api("/feedback", { method: "POST", body: JSON.stringify({ request_id: requestId, rating }) });
+      box.append(pill(rating === "satisfied" ? "đã ghi: hài lòng" : "đã ghi: chưa hài lòng, cache bị xóa", "ok"));
+      refreshView();
+    } catch (e) { box.append(pill(e.message, "err")); }
+  };
+  box.append(
+    h("button", { onclick: act("satisfied") }, "👍 Hài lòng"),
+    h("button", { onclick: act("unsatisfied") }, "👎 Chưa hài lòng"),
+    h("button", { onclick: act("unsatisfied", true) }, "👎 + hỏi lại bằng large"),
+  );
+  turn.append(box);
+}
+
+async function send() {
+  const message = $("#msg").value.trim();
+  if (!message || busy) return;
+  $("#msg").value = "";
+  const body = { message, session_id: sessionId, level: $("#level").value || null, stream: $("#stream").checked };
+  await runStream("Hỏi", message, "/chat", body);
+}
+
+async function runStream(label, question, path, body, feedbackBox = null) {
+  busy = true; $("#sendBtn").disabled = true;
+  const turn = newTurn(label, question);
+  const answerEl = $(".a", turn);
+  let text = "", meta = null;
+  const onEvent = (event, data) => {
+    const stick = nearBottom();
+    if (event === "meta") { meta = data; renderMeta(turn, data); if (data.session_id) setSession(data.session_id); }
+    else if (event === "delta") { text += data.text; answerEl.innerHTML = renderMarkdown(text); }
+    else if (event === "done") { renderDone(turn, data); renderTrace(turn, data.trace); }
+    else if (event === "error") {
+      turn.append(h("div", { class: "err" }, `${data.code}: ${data.message}`));
+      renderTrace(turn, data.trace);
+    }
+    if (stick) scrollToBottom();
+  };
+  try {
+    const r = await fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const ct = r.headers.get("content-type") || "";
+    if (ct.includes("text/event-stream")) {
+      const reader = r.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let i;
+        while ((i = buf.indexOf("\n\n")) >= 0) {
+          const block = buf.slice(0, i); buf = buf.slice(i + 2);
+          let ev = "message", data = "";
+          for (const line of block.split("\n")) {
+            if (line.startsWith("event: ")) ev = line.slice(7);
+            else if (line.startsWith("data: ")) data += line.slice(6);
+          }
+          if (data) onEvent(ev, JSON.parse(data));
+        }
+      }
+    } else {
+      const j = await r.json();
+      if (j.request_id || j.tier) onEvent("meta", j);
+      if (j.answer != null) onEvent("delta", { text: j.answer });
+      if (j.error) onEvent("error", j.error.code ? j.error : { code: r.status, message: JSON.stringify(j.error) });
+      else if (r.ok) onEvent("done", j);
+      else onEvent("error", { code: r.status, message: j.detail ? JSON.stringify(j.detail) : JSON.stringify(j) });
+    }
+  } catch (e) {
+    onEvent("error", { code: "network", message: e.message });
+  } finally {
+    busy = false; $("#sendBtn").disabled = false;
+    if (feedbackBox) feedbackBox.querySelectorAll("button").forEach(b => b.disabled = true);
+    if (meta?.request_id && text) renderFeedback(turn, meta.request_id);
+    refreshView();
+  }
+}
+
+// ---------------------------------------------------------------- right panel
+const state = { tab: "stats", hours: 24, limit: 50, status: "", kind: "" };
+const view = $("#view"), toolbar = $("#toolbar");
+
+$("#tabs").addEventListener("click", e => {
+  const tab = e.target.closest("button[data-tab]")?.dataset.tab;
+  if (!tab) return;
+  state.tab = tab;
+  document.querySelectorAll("#tabs button[data-tab]").forEach(b => b.classList.toggle("active", b.dataset.tab === tab));
+  renderToolbar(); refreshView();
+});
+$("#refreshBtn").onclick = () => { refreshView(); loadHealth(); };
+setInterval(() => { if ($("#autoRefresh").checked && !busy) refreshView(); }, 5000);
+
+function select(options, value, onchange) {
+  const s = h("select", { onchange: e => onchange(e.target.value) },
+    ...options.map(([v, l]) => h("option", { value: v, selected: String(v) === String(value) }, l)));
+  return s;
+}
+
+function renderToolbar() {
+  const t = state.tab;
+  const parts = [];
+  if (t === "stats") parts.push(h("label", {}, "Khoảng",
+    select([[1, "1 giờ"], [24, "24 giờ"], [168, "7 ngày"], [720, "30 ngày"]], state.hours, v => { state.hours = v; refreshView(); })));
+  if (t === "requests") parts.push(
+    h("label", {}, "Trạng thái", select([["", "tất cả"], ["ok", "ok"], ["error", "error"], ["canned", "canned"], ["aborted", "aborted"]],
+      state.status, v => { state.status = v; refreshView(); })),
+    h("label", {}, "Số dòng", select([[20, 20], [50, 50], [200, 200], [500, 500]], state.limit, v => { state.limit = v; refreshView(); })),
+  );
+  if (t === "memory") parts.push(
+    h("label", {}, "Loại", select([["", "tất cả"], ["session", "phiên hội thoại"], ["answer", "cache câu trả lời"],
+      ["req", "bản ghi request"], ["trace", "luồng xử lý"], ["retried", "đã hỏi lại"], ["other", "khác"]], state.kind, v => { state.kind = v; refreshView(); })),
+    h("div", { class: "spacer" }),
+    h("button", { class: "danger", onclick: clearMemory }, "Xóa toàn bộ bộ nhớ"),
+  );
+  toolbar.replaceChildren(...parts);
+}
+
+async function refreshView() {
+  const t = state.tab;
+  // Kiến thức và warmup chỉ render một lần mỗi khi mở tab, tự làm mới không vẽ lại.
+  if (t !== "knowledge") delete view.dataset.knowledge;
+  if (t !== "warmup") delete view.dataset.warmup;
+  try {
+    if (t === "stats") renderStats(await api(`/stats?hours=${state.hours}`));
+    else if (t === "requests") renderRequests(await api(`/requests?limit=${state.limit}${state.status ? "&status=" + state.status : ""}`));
+    else if (t === "memory") renderMemory(await api("/debug/memory"));
+    else if (t === "knowledge") { if (!view.dataset.knowledge) renderKnowledge(await api("/debug/knowledge")); }
+    else if (t === "health") renderJSON(await loadHealth());
+    else if (t === "warmup") renderWarmup();
+  } catch (e) {
+    view.replaceChildren(h("div", { class: "empty" }, "Lỗi: " + e.message));
+  }
+}
+
+function tile(label, value, title) {
+  return h("div", { class: "tile", title }, h("div", { class: "v" }, value), h("div", { class: "l" }, label));
+}
+
+function table(cols, rows, onRowClick) {
+  return h("div", { class: "tablewrap" }, h("table", { class: "data" },
+    h("thead", {}, h("tr", {}, ...cols.map(c => h("th", { class: c.num ? "num" : "" }, c.label)))),
+    h("tbody", {}, ...rows.map(r => h("tr", { onclick: onRowClick && (() => onRowClick(r)) },
+      ...cols.map(c => {
+        const v = c.get ? c.get(r) : r[c.key];
+        return h("td", { class: c.num ? "num" : "" }, v == null ? "–" : v);
+      })))),
+  ));
+}
+
+function renderStats(s) {
+  if (!s.requests) { view.replaceChildren(h("div", { class: "empty" }, "Chưa có request nào trong khoảng này.")); return; }
+  view.replaceChildren(
+    h("div", { class: "tiles" },
+      tile("Request", fmt.int(s.requests)),
+      tile("Tổng chi phí", fmt.usd(s.cost_usd)),
+      tile("Chi phí TB / request", fmt.usd(s.avg_cost_usd)),
+      tile("Tỉ lệ đọc cache prompt", fmt.pct(s.cache_read_ratio), "cached_input / (cached_input + input)"),
+      tile("Hit cache câu trả lời", fmt.pct(s.answer_cache_hit_rate)),
+      tile("TTFT p95", fmt.ms(s.ttft_p95_ms), "Không tính request trúng cache câu trả lời"),
+      tile("Token cache", fmt.int(s.cached_input_tokens)),
+      tile("Token input mới", fmt.int(s.input_tokens)),
+      tile("Token output", fmt.int(s.output_tokens)),
+      tile("Lỗi", fmt.int(s.errors)),
+      tile("Router dự phòng", fmt.int(s.router_fallbacks), "low_confidence, router_unavailable, unknown_intent"),
+      tile("Chưa hài lòng", fmt.int(s.unsatisfied)),
+    ),
+    h("h2", {}, "Theo intent × tầng"),
+    table([
+      { key: "intent", label: "Intent" },
+      { label: "Tầng", get: r => pill(r.tier || "–", tierKind(r.tier)) },
+      { key: "requests", label: "Request", num: true },
+      { label: "Chi phí", num: true, get: r => fmt.usd(r.cost_usd) },
+      { label: "Độ trễ TB", num: true, get: r => fmt.ms(r.avg_latency_ms) },
+      { label: "Đọc cache", num: true, get: r => {
+        const c = r.cached_input_tokens || 0, i = r.input_tokens || 0;
+        return c + i ? fmt.pct(c / (c + i)) : "–";
+      } },
+    ], s.by_intent_tier),
+  );
+}
+
+function renderRequests(rows) {
+  if (!rows.length) { view.replaceChildren(h("div", { class: "empty" }, "Chưa có request nào.")); return; }
+  const detail = h("div");
+  view.replaceChildren(
+    h("div", { class: "muted" }, "Bấm vào một dòng để xem đầy đủ."),
+    table([
+      { key: "time", label: "Thời gian" },
+      { label: "Trạng thái", get: r => pill(r.status, statusKind(r.status)) },
+      { key: "kind", label: "Loại" },
+      { key: "intent", label: "Intent" },
+      { label: "Tầng", get: r => r.tier ? pill(r.tier, tierKind(r.tier)) : null },
+      { key: "route_reason", label: "Lý do route" },
+      { label: "Router", get: r => r.router_backend ? `${r.router_backend} ${fmt.num(r.router_confidence)}` : null },
+      { key: "answer_cache", label: "Cache TL" },
+      { key: "model", label: "Model" },
+      { label: "Cache/Input/Out", num: true, get: r => `${fmt.int(r.cached_input_tokens)} / ${fmt.int(r.input_tokens)} / ${fmt.int(r.output_tokens)}` },
+      { label: "Chi phí", num: true, get: r => fmt.usd(r.cost_usd) },
+      { label: "TTFT", num: true, get: r => fmt.ms(r.ttft_ms) },
+      { label: "Tổng", num: true, get: r => fmt.ms(r.latency_ms) },
+      { key: "feedback", label: "Feedback" },
+    ], rows, r => showRequest(detail, r)),
+    detail,
+  );
+}
+
+async function showRequest(detail, r) {
+  const traceBox = h("div", { class: "turn" }, h("div", { class: "muted", style: "padding:8px 12px" }, "Đang tải luồng xử lý…"));
+  detail.replaceChildren(h("h2", {}, "Request " + r.request_id), traceBox,
+    h("details", {}, h("summary", { class: "muted" }, "Dòng log (JSON)"), h("pre", { class: "json" }, JSON.stringify(r, null, 2))));
+  detail.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  try {
+    const steps = await api(`/debug/trace/${r.request_id}`);
+    traceBox.replaceChildren(h("div", { class: "muted", style: "padding:6px 12px" }, "Luồng xử lý · " + traceSummary(steps)), traceList(steps));
+  } catch (e) {
+    traceBox.replaceChildren(h("div", { class: "muted", style: "padding:8px 12px" }, e.message));
+  }
+}
+
+function renderMemory(m) {
+  const labels = { session: "Phiên hội thoại", answer: "Cache câu trả lời", req: "Bản ghi request", trace: "Luồng xử lý",
+    retried: "Đã hỏi lại", other: "Khác" };
+  const items = m.items.filter(i => !state.kind || i.kind === state.kind);
+  const ns = Object.entries(m.semantic_index);
+  view.replaceChildren(
+    h("div", { class: "tiles" },
+      tile("Backend store", m.backend),
+      ...Object.entries(m.counts).filter(([k, n]) => n || k !== "other").map(([k, n]) => tile(labels[k], fmt.int(n))),
+      tile("Chỉ mục gần giống", fmt.int(ns.reduce((a, [, n]) => a + n, 0)), "Số embedding trong bộ nhớ tiến trình"),
+      m.embedder_lru ? tile("LRU embedding", `${fmt.int(m.embedder_lru.size)} / ${fmt.int(m.embedder_lru.capacity)}`) : null,
+    ),
+    h("div", { class: "row" }, h("span", { class: "muted" }, "Router:"),
+      ...m.router.map(r => pill(`${r.name} (ngưỡng ${r.threshold})` + ("examples_loaded" in r ? (r.examples_loaded ? " · đã nạp câu mẫu" : " · chưa nạp câu mẫu") : ""))),
+      ns.length ? h("span", { class: "muted" }, "· Namespace chỉ mục:") : null,
+      ...ns.map(([k, n]) => pill(`${k}: ${n}`))),
+    items.length ? h("div", { style: "display:flex;flex-direction:column;gap:6px" }, ...items.map(memoryItem))
+      : h("div", { class: "empty" }, "Không có key nào."),
+  );
+}
+
+function memoryItem(i) {
+  const v = i.value;
+  let preview = "", body = [];
+  if (i.kind === "session" && v && v.messages) {
+    preview = `${v.messages.filter(x => x.role === "user").length} lượt` + (v.summary ? " · có tóm tắt" : "");
+    if (v.summary) body.push(h("div", { class: "msg" }, h("span", { class: "role" }, "tóm tắt phiên trước"), v.summary));
+    body.push(...v.messages.map(x => h("div", { class: `msg ${x.role}` }, h("span", { class: "role" }, x.role), x.content)));
+  } else if (i.kind === "answer" && v) {
+    preview = `${v.question} · ${v.tier} · ${v.model}`;
+    body.push(h("div", { class: "turn" }, h("div", { class: "a" })));
+    body[0].firstChild.innerHTML = renderMarkdown(v.text || "");
+  } else if (i.kind === "trace" && Array.isArray(v)) {
+    preview = traceSummary(v);
+    body.push(h("div", { class: "turn" }, traceList(v)));
+  } else if (i.kind === "req" && v) {
+    preview = `${v.question} · ${v.intent || "–"} · ${v.tier}` + (v.cacheable ? " · cacheable" : "") + (v.is_retry ? " · retry" : "");
+  } else {
+    preview = typeof v === "string" ? v : "";
+  }
+  body.push(h("details", {}, h("summary", { class: "muted" }, "JSON"), h("pre", { class: "json" }, JSON.stringify(v, null, 2))));
+  return h("details", { class: "item" },
+    h("summary", {}, pill(i.kind, i.kind === "answer" ? "ok" : i.kind === "session" ? "accent" : ""),
+      h("span", { class: "mono", style: "overflow-wrap:anywhere" }, i.key),
+      pill("TTL " + fmt.ttl(i.ttl_s)), pill(fmt.bytes(i.bytes)),
+      preview ? h("span", { class: "muted" }, preview.length > 90 ? preview.slice(0, 90) + "…" : preview) : null),
+    h("div", { class: "body" }, ...body),
+  );
+}
+
+async function clearMemory() {
+  if (!confirm("Xóa toàn bộ phiên, cache câu trả lời và bản ghi request trong bộ nhớ?")) return;
+  try {
+    const r = await api("/debug/memory/clear", { method: "POST" });
+    setSession(null);
+    alert(`Đã xóa ${r.deleted} key.`);
+  } catch (e) { alert("Lỗi: " + e.message); }
+  refreshView();
+}
+
+function renderKnowledge(k) {
+  view.dataset.knowledge = "1";
+  view.replaceChildren(
+    h("div", { class: "row" }, pill("version " + k.version), pill(`~${fmt.int(k.estimated_tokens)} token`),
+      ...k.files.map(f => pill(f))),
+    h("div", { class: "muted" }, "Đây là system prompt cố định, giống nhau từng byte ở mọi request, nên nhà cung cấp cache được phần này."),
+    h("pre", { class: "json", style: "max-height:none" }, k.text),
+  );
+}
+
+function renderJSON(obj) { view.replaceChildren(h("pre", { class: "json" }, JSON.stringify(obj, null, 2))); }
+
+function renderWarmup() {
+  if (view.dataset.warmup) return;
+  view.dataset.warmup = "1";
+  const out = h("div");
+  const btn = h("button", { class: "primary", onclick: async () => {
+    btn.disabled = true; out.replaceChildren(h("div", { class: "muted" }, "Đang gọi…"));
+    try { out.replaceChildren(h("pre", { class: "json" }, JSON.stringify(await api("/admin/warmup", { method: "POST" }), null, 2))); }
+    catch (e) { out.replaceChildren(h("div", { class: "empty" }, "Lỗi: " + e.message)); }
+    btn.disabled = false;
+  } }, "Chạy warmup");
+  view.replaceChildren(
+    h("div", { class: "muted" }, "Gửi 1 request (max_tokens=1) cho model chính của tầng small và large để nhà cung cấp ghi cache phần kiến thức. Gọi API thật, tốn một ít tiền."),
+    h("div", {}, btn), out,
+  );
+}
+renderToolbar();
+loadHealth();
+refreshView();
+</script>
+</body>
+</html>

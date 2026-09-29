@@ -27,9 +27,7 @@ flowchart TD
     D --> E{Câu đầu phiên và<br/>trúng cache khớp tuyệt đối?}
     E -- trúng --> Z1[Trả câu trả lời đã cache, $0]
     E -- không --> F[Router: Jev → embedding → large<br/>song song: tính embedding câu hỏi]
-    F --> G{off_topic?}
-    G -- có --> Z2[Trả câu mẫu, $0]
-    G -- không --> I{Được cache và<br/>trúng cache gần giống?}
+    F --> I{Được cache và<br/>trúng cache gần giống?}
     I -- trúng --> Z1
     I -- không --> J[Ghép prompt:<br/>system cố định + lịch sử + lượt user mới]
     J --> K[Gateway: gọi model theo tầng qua OpenRouter<br/>lỗi trước token đầu thì thử model dự phòng]
@@ -64,7 +62,7 @@ Khi chạy `uvicorn app.main:app`:
 
 3. **Làm nóng cache** (chỉ khi `WARMUP_ON_STARTUP=true`): gửi 1 request `max_tokens=1` với prompt `[system cố định, "ping"]` cho model chính của tầng `small` và `large`. Nhà cung cấp ghi KV của phần kiến thức vào cache, nên request thật đầu tiên đã được tính giá đọc cache.
 
-Router embedding **chưa** gọi API lúc khởi động. Lần đầu cần phân loại, nó embed 55 câu mẫu trong `app/resources/router_examples.jsonl` bằng một lần gọi, rồi giữ ma trận trong bộ nhớ.
+Router embedding **chưa** gọi API lúc khởi động. Lần đầu cần phân loại, nó embed 63 câu mẫu trong `app/resources/router_examples.jsonl` bằng một lần gọi, rồi giữ ma trận trong bộ nhớ.
 
 Khi tắt, `Container.aclose()` đóng client HTTP (dùng chung cho chat, Jev và embedding), kết nối Redis và SQLite.
 
@@ -109,24 +107,25 @@ Khi tắt, `Container.aclose()` đóng client HTTP (dùng chung cho chat, Jev v�
 
 | Bộ phân loại | Cách làm | Ngưỡng confidence |
 |---|---|---|
-| **Jev** | `POST https://openrouter.ai/api/v1/systemone` với `model: "typesafe/jev-1.13"`, `state: {"question": ...}` và 2 câu hỏi: `intent` (Choice, 6 lựa chọn mô tả bằng tiếng Anh) và `needs_context` (Noul). Dùng `OPENROUTER_API_KEY`. Timeout 0,8s, không retry | `JEV_CONFIDENCE_THRESHOLD` = 0,6 |
-| **Embedding** | Cosine giữa embedding câu hỏi và 55 câu mẫu có nhãn. Điểm mỗi intent = trung bình 3 câu mẫu giống nhất; confidence = softmax của các điểm. `needs_context` đoán bằng regex ("từ đó", "câu trên", "thêm ví dụ", "这个词"…) | `EMBEDDING_CONFIDENCE_THRESHOLD` = 0,55 |
+| **Jev** | `POST https://openrouter.ai/api/v1/systemone` với `model: "typesafe/jev-1.13"`, `state: {"question": ...}` và 2 câu hỏi: `intent` (Choice, 7 lựa chọn mô tả bằng tiếng Anh) và `needs_context` (Noul). Dùng `OPENROUTER_API_KEY`. Timeout 0,8s, không retry | `JEV_CONFIDENCE_THRESHOLD` = 0,6 |
+| **Embedding** | Cosine giữa embedding câu hỏi và 63 câu mẫu có nhãn. Điểm mỗi intent = trung bình 3 câu mẫu giống nhất; confidence = softmax của các điểm. `needs_context` đoán bằng regex ("từ đó", "câu trên", "thêm ví dụ", "这个词"…) | `EMBEDDING_CONFIDENCE_THRESHOLD` = 0,55 |
 
 - Bộ nào ném lỗi (timeout, lỗi mạng, thiếu embedding) thì chuyển sang bộ sau. Tất cả đều lỗi thì trả `Route("large", cacheable=False, "router_unavailable")`.
 - Từ kết quả phân loại ra quyết định (`IntentRouter.decide`):
 
 | Kết quả | Tầng | Được cache | `max_tokens` |
 |---|---|---|---|
-| `lookup`, `translate` | `small` | có, nếu `needs_context < 0,5` | 300 |
+| `lookup`, `translate` | `small` | có, nếu `needs_context < 0,5` | 600 |
+| `study` | `small` | có, nếu `needs_context < 0,5` | 800 |
 | `grammar`, `culture` | `large` | có, nếu `needs_context < 0,5` | 1.000 |
 | `correction` | `large` | không | 1.200 |
-| `off_topic` | câu mẫu | không | — |
+| `off_topic` | `small` | không | 400 |
 | confidence dưới ngưỡng | `large` | không | 1.000 |
 | intent lạ, router lỗi | `large` | không | 1.000 |
 
-**Bước 4: câu ngoài phạm vi**
+**Bước 4: câu ngoài tiếng Trung**
 
-`off_topic` thì hủy task embedding, trả `OFF_TOPIC_ANSWER` trong [app/canned.py](../app/canned.py), ghi log với `status = canned`. Không gọi LLM, và không thêm vào lịch sử phiên.
+`off_topic` không bị từ chối: đi tầng `small` như mọi intent khác, với gợi ý "Dạng câu hỏi: ngoài chủ đề tiếng Trung". Quy tắc 7 trong [knowledge/00_vai_tro.md](../knowledge/00_vai_tro.md) bảo model trả lời ngắn rồi thêm dòng **Học thêm** với 1–3 từ tiếng Trung liên quan. Câu trả lời không được cache vì loại câu này hay cần dữ liệu thời gian thực.
 
 **Bước 5: điều kiện cache**
 
@@ -180,7 +179,7 @@ data: {"request_id": "6774…", "model": "qwen/qwen3.8-flash", "provider": "Alib
 | Event | Khi nào | Trường chính |
 |---|---|---|
 | `meta` | Luôn là event đầu tiên | `request_id` (dùng cho feedback), `session_id` (dùng để hỏi tiếp), `tier`, `intent`, `reason`, `answer_cache` (`exact`, `semantic` hoặc `null`) |
-| `delta` | Mỗi đoạn trả lời | `text`. Câu trả lời lấy từ cache hoặc câu mẫu thì chỉ có một `delta` chứa cả câu |
+| `delta` | Mỗi đoạn trả lời | `text`. Câu trả lời lấy từ cache thì chỉ có một `delta` chứa cả câu |
 | `done` | Kết thúc thành công | `model`, `provider`, `usage`, `cost_usd`, `ttft_ms`, `latency_ms`, `truncated` |
 | `error` | LLM lỗi | `code: "llm_unavailable"`, `message` |
 
@@ -238,7 +237,7 @@ Quy tắc chống prompt injection nằm trong `knowledge/00_vai_tro.md`: nội 
   "model": "qwen/qwen3.8-flash",
   "messages": ["…system…", "…user…"],
   "stream": true,
-  "max_tokens": 300,
+  "max_tokens": 600,
   "temperature": 0.3,
   "reasoning": {"enabled": false},
   "provider": {"order": ["alibaba"], "allow_fallbacks": true},
@@ -360,7 +359,7 @@ Các cột chính của bảng `requests` ([app/usage_log.py](../app/usage_log.p
 | Cache | `answer_cache` (`exact`/`semantic`/NULL), `cached_input_tokens`, `cache_write_tokens` |
 | Chi phí | `input_tokens`, `output_tokens`, `reasoning_tokens`, `cost_usd` |
 | Hiệu năng | `ttft_ms`, `latency_ms` |
-| Kết quả | `status` (`ok`/`error`/`canned`/`aborted`), `error`, `feedback` |
+| Kết quả | `status` (`ok`/`error`/`aborted`; `canned` chỉ còn ở log cũ), `error`, `feedback` |
 
 Xem từng dòng: `curl "localhost:8000/requests?limit=20"` (lọc lỗi: `&status=error`). Số liệu tổng hợp: `curl "localhost:8000/stats?hours=24"`:
 
@@ -450,7 +449,7 @@ python -m eval.answer_eval --judge anthropic/claude-sonnet-5   # 13 câu qua to�
 | Chỉ mục cache gần giống nằm trong bộ nhớ | Mất khi restart; nhiều worker thì mỗi worker một chỉ mục riêng | Chuyển sang pgvector |
 | Log dùng SQLite | Không hợp khi chạy nhiều container | Chuyển sang Postgres, giữ nguyên tên cột |
 | RAG chưa có | Chỉ dùng kiến thức cốt lõi (~7.600 token) | Giai đoạn 6 |
-| Router embedding chỉ có 55 câu mẫu | Độ chính xác chưa được đo trên câu hỏi thật | Gom ~300 câu hỏi thật, chạy `router_eval`, chuyển sang logistic regression |
+| Router embedding chỉ có 63 câu mẫu | Độ chính xác chưa được đo trên câu hỏi thật | Gom ~300 câu hỏi thật, chạy `router_eval`, chuyển sang logistic regression |
 | Tóm tắt phiên chạy đồng bộ ở lượt thứ 11 | Lượt đó chậm thêm một lần gọi LLM | Tóm tắt nền sau lượt thứ 10 |
 | Client ngắt kết nối giữa chừng | Token đã sinh vẫn bị tính tiền nhưng log không có usage | Chấp nhận, theo dõi tỉ lệ `aborted` |
 | Chưa có xác thực và quota | Ai gọi được API đều dùng được, không giới hạn lượt | Thêm sau khi xong bản test |

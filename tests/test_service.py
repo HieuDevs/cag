@@ -2,7 +2,6 @@ import json
 
 import pytest
 
-from app.canned import OFF_TOPIC_ANSWER
 from app.router import Route
 from app.service import ChatInput, ServiceError
 from tests.conftest import collect
@@ -20,7 +19,7 @@ async def test_first_question_calls_llm_and_logs_usage(service, backend, contain
     assert out["done"]["usage"]["cached_input_tokens"] == 7000
     target, req = backend.calls[0]
     assert target.model == "qwen/small"
-    assert req.max_tokens == 300 and req.reasoning is False
+    assert req.max_tokens == 600 and req.reasoning is False
     assert "Trình độ người học: HSK1" in req.messages[-1]["content"]
     [row] = rows(container)
     assert row["intent"] == "lookup" and row["cost_usd"] == pytest.approx(0.0005) and row["status"] == "ok"
@@ -73,12 +72,16 @@ async def test_session_of_other_user_is_not_reused(service, backend):
     assert len(backend.calls[-1][1].messages) == 2
 
 
-async def test_off_topic_is_canned(service, backend, router, container):
-    router.next = Route("canned", False, "off_topic", intent="off_topic", confidence=0.9)
+async def test_off_topic_is_answered_by_small_without_cache(service, backend, router, container):
+    router.next = Route("small", False, "off_topic", intent="off_topic", confidence=0.9)
     out = await collect(service.chat(ChatInput(user_id="u1", message="giá bitcoin?")))
-    assert out["text"] == OFF_TOPIC_ANSWER and out["meta"]["tier"] == "canned"
-    assert backend.calls == []
-    assert rows(container)[-1]["status"] == "canned"
+    assert out["text"].strip() == "Câu trả lời mẫu." and out["meta"]["tier"] == "small"
+    target, req = backend.calls[-1]
+    assert target.model == "qwen/small" and req.max_tokens == 400
+    assert "Dạng câu hỏi: ngoài chủ đề tiếng Trung" in req.messages[-1]["content"]
+    assert rows(container)[-1]["status"] == "ok"
+    again = await collect(service.chat(ChatInput(user_id="u1", message="giá bitcoin?")))
+    assert again["meta"]["answer_cache"] is None, "Không cache câu ngoài chủ đề"
 
 
 async def test_correction_is_not_cached(service, backend, router):

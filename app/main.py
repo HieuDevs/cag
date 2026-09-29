@@ -1,5 +1,7 @@
 """FastAPI: `/chat` (stream SSE), `/feedback`, `/health`, `/stats`, `/requests`, `/admin/warmup`.
 
+Trang test ở `/` (`app/static/index.html`), đọc dữ liệu từ các endpoint trên và `/debug/*`.
+
 Bản test: chưa có xác thực và quota. Cấu hình đọc trong `lifespan`, thiếu biến bắt buộc thì dừng khi start.
 """
 
@@ -8,20 +10,26 @@ import logging
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, Query, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.config import Settings, get_settings
 from app.container import Container, build_container
+from app.router import EmbeddingClassifier
 from app.service import ChatInput, Event, ServiceError
+from app.store import MemoryStore
 
 log = logging.getLogger(__name__)
 
 # Bản test: chưa có xác thực, mọi request dùng chung một user.
 TEST_USER_ID = "test-user"
+STATIC_DIR = Path(__file__).parent / "static"
+# Prefix key trong KV store: phiên hội thoại, cache câu trả lời, bản ghi request, luồng chạy, đếm số lần hỏi lại.
+STORE_PREFIXES = ("session", "answer", "req", "trace", "retried")
 
 
 class ChatBody(BaseModel):
@@ -105,6 +113,68 @@ def create_app(settings: Settings | None = None, container: Container | None = N
     @app.post("/admin/warmup")
     async def warmup(c: Container = Depends(get_container)) -> list[dict[str, Any]]:
         return await c.service.warmup()
+
+    @app.get("/", include_in_schema=False)
+    async def index() -> FileResponse:
+        return FileResponse(STATIC_DIR / "index.html")
+
+    @app.get("/debug/memory")
+    async def debug_memory(c: Container = Depends(get_container)) -> dict[str, Any]:
+        """Nội dung KV store, chỉ mục cache gần giống, LRU embedding và trạng thái router."""
+        items = []
+        counts = dict.fromkeys((*STORE_PREFIXES, "other"), 0)
+        for key, raw, ttl in await c.store.scan():
+            kind = key.split(":", 1)[0]
+            kind = kind if kind in STORE_PREFIXES else "other"
+            counts[kind] += 1
+            try:
+                value = json.loads(raw)
+            except ValueError:
+                value = raw
+            items.append({"key": key, "kind": kind, "ttl_s": ttl, "bytes": len(raw.encode()), "value": value})
+        embedder = c.service.embedder
+        return {
+            "backend": "memory" if isinstance(c.store, MemoryStore) else "redis",
+            "counts": counts,
+            "items": items,
+            "semantic_index": c.service.answer_cache.index.sizes(),
+            "embedder_lru": embedder.lru_stats if embedder else None,
+            "router": [
+                {
+                    "name": clf.name,
+                    "threshold": clf.threshold,
+                    **({"examples_loaded": clf._matrix is not None} if isinstance(clf, EmbeddingClassifier) else {}),
+                }
+                for clf in c.router.classifiers
+            ],
+        }
+
+    @app.post("/debug/memory/clear")
+    async def debug_memory_clear(c: Container = Depends(get_container)) -> dict[str, Any]:
+        """Xóa phiên, cache câu trả lời, bản ghi request. Chỉ cho `REDIS_URL=memory://`."""
+        if not isinstance(c.store, MemoryStore):
+            raise ServiceError("not_memory_store", "Chỉ xóa được khi REDIS_URL=memory://", 409)
+        items = await c.store.scan()
+        for key, _, _ in items:
+            await c.store.delete(key)
+        c.service.answer_cache.index.clear()
+        if c.service.embedder:
+            c.service.embedder.clear()
+        return {"deleted": len(items)}
+
+    @app.get("/debug/trace/{request_id}")
+    async def debug_trace(request_id: str, c: Container = Depends(get_container)) -> list[dict[str, Any]]:
+        """Luồng chạy của một request (giữ 24 giờ)."""
+        raw = await c.store.get(f"trace:{request_id}")
+        if raw is None:
+            raise ServiceError("not_found", "Không có trace cho request này (hết hạn hoặc bị xóa)", 404)
+        return json.loads(raw)
+
+    @app.get("/debug/knowledge")
+    async def debug_knowledge(c: Container = Depends(get_container)) -> dict[str, Any]:
+        """Phần kiến thức cố định nằm trong system prompt (phần được cache)."""
+        k = c.service.prompt.knowledge
+        return {"version": k.version, "files": k.files, "estimated_tokens": k.estimated_tokens, "text": k.text}
 
     return app
 

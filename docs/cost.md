@@ -73,7 +73,7 @@ Mức tiết kiệm dưới đây tính trên chi phí trả lời trong kịch 
 | 4 | Cache câu trả lời (15–30% câu hỏi trùng) | 15–30% | [caching.md](caching.md) |
 | 5 | Batch API cho việc không cần trả lời ngay (tạo sẵn nội dung, chấm bài qua đêm) | ~50% phần đó | |
 | 6 | Rút gọn kiến thức cốt lõi 20K → 10K, phần còn lại chuyển sang RAG | ~10% | [architecture.md](architecture.md) |
-| 7 | Câu `off_topic` trả câu mẫu | 100% phần đó | [routing.md](routing.md) |
+| 7 | Câu `off_topic` đi tầng `small`, giới hạn 400 token (trước đây trả câu mẫu, $0; nay vẫn trả lời nên tốn tiền `small`) | — | [routing.md](routing.md) |
 
 Kết hợp cách 1–4 trên kịch bản Claude: $0.016 xuống khoảng **$0.0055–0.007 mỗi request (giảm 57–65%)**. Mức Vừa giảm từ $16.000 xuống khoảng $5.500–7.000 mỗi tháng.
 
